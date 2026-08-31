@@ -38,7 +38,8 @@ SECTIONS: list[Section] = [
         entries=[
             ("football record", "Played, won, drawn, lost, goals."),
             ("football h2h <club>", "The record against one opponent."),
-            ("football runs --of unbeaten", "Longest sequences."),
+            ("football runs", "Every longest run, combined and home/away."),
+            ("football runs --of unbeaten", "One kind of run, listed in full."),
             ("football extremes --by margin", "Biggest wins, crowds, scorelines."),
             ("football clubs [name]", "List clubs, or find one by name."),
             ("football seasons", "League position and outcome per season."),

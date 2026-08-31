@@ -150,3 +150,102 @@ def test_attendance_extremes_ignore_matches_with_none_recorded(conn):
     rows, _ = ex.extremes(conn, Filters(club=CLUB), by="attendance", limit=10)
     assert len(rows) == 2, "only matches with a recorded crowd may be ranked"
     assert rows[0][7] == 40000
+
+
+def test_a_run_without_scoring_counts_the_matches_that_drew_a_blank(tmp_path):
+    conn = _seed(tmp_path, [
+        _m("1982-08-28", "arsenal", 1, 0),
+        _m("1982-09-04", "watford", 0, 1),
+        _m("1982-09-11", "everton", 0, 0),
+        _m("1982-09-18", "ipswich-town", 0, 2),
+        _m("1982-09-25", "wisbech-town", 2, 0),
+    ])
+    ms = runs.matches_in_order(conn, Filters(club=CLUB))
+    run = runs.longest(ms, "without-scoring")
+    assert run.length == 3
+    assert run.start.date == "1982-09-04" and run.end.date == "1982-09-18"
+
+
+def test_a_goalless_draw_continues_both_a_clean_sheet_and_a_scoreless_run(tmp_path):
+    conn = _seed(tmp_path, [_m("1982-08-28", "arsenal", 0, 0)])
+    ms = runs.matches_in_order(conn, Filters(club=CLUB))
+    assert runs.longest(ms, "clean-sheets").length == 1
+    assert runs.longest(ms, "without-scoring").length == 1
+
+
+def test_a_scoreless_run_is_broken_by_a_match_with_no_score(tmp_path):
+    """Nobody knows whether they scored, so the run cannot be said to continue."""
+    conn = _seed(tmp_path, [
+        _m("1982-08-28", "arsenal", 0, 1),
+        dict(_m("1982-09-04", "watford", 0, 0), ft_home="", ft_away=""),
+        _m("1982-09-11", "everton", 0, 2),
+    ])
+    ms = runs.matches_in_order(conn, Filters(club=CLUB))
+    assert runs.longest(ms, "without-scoring").length == 1
+
+
+def test_a_run_knows_the_matches_that_bookended_it(conn):
+    ms = runs.matches_in_order(conn, Filters(club=CLUB))
+    run = runs.longest(ms, "wins")
+    assert run.before.date == "1982-08-28", "the draw that preceded the two wins"
+    assert run.after.date == "1982-09-18", "the Everton defeat that ended them"
+
+
+def test_a_run_that_opens_the_record_has_nothing_before_it(conn):
+    ms = runs.matches_in_order(conn, Filters(club=CLUB))
+    assert runs.longest(ms, "unbeaten").before is None
+
+
+def test_a_run_that_closes_the_record_has_nothing_after_it(tmp_path):
+    conn = _seed(tmp_path, [
+        _m("1982-08-28", "arsenal", 1, 0),
+        _m("1982-09-04", "watford", 0, 1),
+        _m("1982-09-11", "everton", 0, 2),
+    ])
+    ms = runs.matches_in_order(conn, Filters(club=CLUB))
+    run = runs.longest(ms, "losses")
+    assert run.length == 2 and run.after is None
+
+
+def test_a_winless_gap_is_measured_from_the_last_win_to_the_next(tmp_path):
+    conn = _seed(tmp_path, [
+        _m("1982-01-01", "arsenal", 1, 0),
+        _m("1982-01-08", "watford", 0, 1),
+        _m("1982-01-15", "everton", 1, 1),
+        _m("1982-01-31", "ipswich-town", 2, 0),
+    ])
+    ms = runs.matches_in_order(conn, Filters(club=CLUB))
+    run = runs.longest(ms, "without-win")
+    assert run.length == 2
+    assert run.days == 30, "1 January to 31 January, win to win"
+    assert run.bounded
+
+
+def test_an_unfinished_gap_reports_the_span_it_can_prove(tmp_path):
+    """A gap still running at the end of the record is a lower bound, not a fact."""
+    conn = _seed(tmp_path, [
+        _m("1982-01-01", "arsenal", 1, 0),
+        _m("1982-01-08", "watford", 0, 1),
+        _m("1982-01-15", "everton", 1, 1),
+    ])
+    ms = runs.matches_in_order(conn, Filters(club=CLUB))
+    run = runs.longest(ms, "without-win")
+    assert not run.bounded
+    assert run.days == 7, "8 January to 15 January is all that can be shown"
+
+
+def test_a_gap_ended_by_an_unknown_result_is_not_treated_as_ended_by_a_win(tmp_path):
+    conn = _seed(tmp_path, [
+        _m("1982-01-01", "arsenal", 1, 0),
+        _m("1982-01-08", "watford", 0, 1),
+        dict(_m("1982-01-15", "everton", 0, 0), ft_home="", ft_away=""),
+    ])
+    ms = runs.matches_in_order(conn, Filters(club=CLUB))
+    assert not runs.longest(ms, "without-win").bounded
+
+
+def test_an_ordinary_run_is_measured_across_its_own_matches(conn):
+    ms = runs.matches_in_order(conn, Filters(club=CLUB))
+    run = runs.longest(ms, "unbeaten")
+    assert run.days == 14, "28 August to 11 September"
+    assert run.bounded, "a run of its own matches is bounded by definition"

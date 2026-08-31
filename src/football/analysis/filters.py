@@ -20,7 +20,8 @@ GROUPING_TYPES = ("league", "play-off", "europe")
 
 SIDES = ("home", "away", "neutral")
 
-RUN_TYPES = ("unbeaten", "wins", "losses", "draws", "without-win", "clean-sheets")
+RUN_TYPES = ("unbeaten", "wins", "draws", "losses", "without-win",
+             "without-scoring", "clean-sheets")
 
 
 @dataclass(frozen=True)

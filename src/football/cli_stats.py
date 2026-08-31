@@ -262,6 +262,39 @@ def _round_order(name: str) -> tuple[int, float, str]:
     return (3, 0, name)  # anything unrecognised, alphabetically, at the end
 
 
+#: How each run type reads in a table. The slug is what you type; these are
+#: what a supporter would say, so a column of them can be read as English.
+_RUN_LABELS = {
+    "unbeaten": "unbeaten",
+    "wins": "wins",
+    "draws": "draws",
+    "losses": "losses",
+    "without-win": "without a win",
+    "without-scoring": "without a goal",
+    "clean-sheets": "clean sheets",
+}
+
+_RUNS_FOOTNOTE = (
+    "\nA run is broken by a match with no known result: an unbeaten "
+    "sequence through a match nobody knows the outcome of is an assumption, "
+    "not a fact. Outcomes include extra time and penalties.\n"
+    "Days measure a drought from the last win — or the last goal — to the "
+    "next, and any other run across its own matches. A drought the record "
+    "cannot see the end of is marked +, meaning at least that long."
+)
+
+
+def _seasons(run: runs.Run) -> str:
+    """The season a run belongs to, or the two it stretched between."""
+    return (run.start.season if run.start.season == run.end.season
+            else f"{run.start.season} to {run.end.season}")
+
+
+def _days(run: runs.Run) -> str:
+    """How long a run lasted, marked when that is only a lower bound."""
+    return f"{run.days}" if run.bounded else f"{run.days}+"
+
+
 def _heading(filters: Filters, title: str, conn=None) -> None:
     name = club_name(conn, filters.club) if conn is not None else filters.club
     click.echo()
@@ -476,27 +509,74 @@ def register(cli, connect):
                 records.meetings(conn, filters)))
 
     @cli.command(name="runs")
-    @click.option("--of", type=click.Choice(RUN_TYPES), default="unbeaten",
-                  show_default=True, help="What kind of run.")
+    @click.option("--of", type=click.Choice(RUN_TYPES), default=None,
+                  help="Drill into one kind of run. Omit for all of them.")
+    @click.option("--split", is_flag=True,
+                  help="With --of, a table for each of combined, home, away.")
     @click.option("--top", default=5, show_default=True, help="How many to list.")
     @filter_options()
     @prepared(connect)
-    def runs_command(conn, filters, of, top):
-        """Longest sequences: unbeaten, wins, losses, clean sheets."""
-        matches = runs.matches_in_order(conn, filters)
-        _heading(filters, f"Longest runs — {of}", conn)
-        found = runs.all_runs(matches, of, minimum=2)[:top]
+    def runs_command(conn, filters, of, split, top):
+        """Longest sequences: unbeaten, wins, droughts, clean sheets.
+
+        With no --of, every kind of run at once, each shown combined, at
+        home and away.
+        """
+        if of is None:
+            _heading(filters, "Longest runs", conn)
+            _runs_summary(conn, filters)
+        else:
+            _heading(filters, f"Longest runs — {_RUN_LABELS[of]}", conn)
+            for side, sided in _sides(filters, split):
+                _runs_listing(conn, sided, of, top, side if split else None)
+        click.echo(click.style(_RUNS_FOOTNOTE, dim=True))
+
+    def _sides(filters, split):
+        """The (label, filters) pairs a runs table is built from.
+
+        An explicit --side has already answered the question, so it is
+        reported on its own rather than alongside a breakdown that would
+        repeat it.
+        """
+        if filters.side:
+            return [(filters.side, filters)]
+        if not split:
+            return [("combined", filters)]
+        return [("combined", filters), ("home", replace(filters, side="home")),
+                ("away", replace(filters, side="away"))]
+
+    def _runs_summary(conn, filters):
+        """Every kind of run, each side by side across the venues."""
+        columns = _sides(filters, split=True)
+        rows = []
+        for of in RUN_TYPES:
+            cells = []
+            for _, sided in columns:
+                run = runs.longest(runs.matches_in_order(conn, sided), of)
+                # An em dash, not a nought: a club that has never won three
+                # in a row has no such run, which is not a run of length nil.
+                cells.append("—" if run is None
+                             else f"{run.length} ({_seasons(run)})")
+            rows.append([_RUN_LABELS[of], *cells])
+        click.echo(present.render_table(
+            ["run", *(label for label, _ in columns)], rows))
+
+    def _runs_listing(conn, filters, of, top, side):
+        """The longest runs of one kind, at length."""
+        found = runs.all_runs(runs.matches_in_order(conn, filters),
+                              of, minimum=2)[:top]
+        caption = click.style(f"{_RUN_LABELS[of]} — {side}",
+                              fg="cyan") if side else None
         if not found:
-            click.echo("\n" + f"No run of {of} under those filters.")
+            click.echo("\n" + (f"No run of {_RUN_LABELS[of]}"
+                               + (f" — {side}" if side else "")
+                               + " under those filters."))
             return
         click.echo(present.render_table(
-            ["length", "from", "to", "seasons"],
-            [[r.length, r.start.date, r.end.date,
-              r.start.season if r.start.season == r.end.season
-              else f"{r.start.season} to {r.end.season}"] for r in found]))
-        click.echo(click.style(
-            "\nA run is broken by a defeat or by a match with no known result. "
-            "Outcomes include extra time and penalties.", dim=True))
+            ["length", "from", "to", "seasons", "days"],
+            [[r.length, r.start.date, r.end.date, _seasons(r), _days(r)]
+             for r in found],
+            caption=caption))
 
     @cli.command(name="clubs")
     @click.argument("search", required=False)

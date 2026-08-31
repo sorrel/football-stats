@@ -51,7 +51,8 @@ own.
 football clubs albion                    # find a club by name
 football record --club brighton --tier 1 # top-flight record, all eras
 football h2h palace --club brighton      # split home, away and neutral
-football runs --of unbeaten --top 5      # longest unbeaten sequences
+football runs                            # every longest run, home and away
+football runs --of without-win --top 5   # the longest droughts, listed
 football extremes --by attendance        # record crowds
 football seasons                         # position and outcome per season
 football seasons --cups                  # how far each cup run went
@@ -69,7 +70,12 @@ Two conventions worth knowing:
 
 - **Runs use the final outcome**, including extra time and penalties: a tie
   lost on penalties ends an unbeaten run. Aggregate records use the
-  90-minute result, as league tables always have.
+  90-minute result, as league tables always have. `runs` on its own answers
+  every run question at once — unbeaten, wins, draws, losses, the droughts
+  without a win and without a goal, and clean sheets — each shown combined,
+  at home and away. A drought is measured in matches and in days from the
+  last win to the next; one the record cannot see the end of is marked `+`,
+  meaning at least that long.
 - **Play-offs are an addendum to a league season**, not part of the table or
   that season's league record. They carry a tier, so a tier filter includes
   them — and any command whose result mixes the two says so.
