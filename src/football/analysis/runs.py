@@ -15,6 +15,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date
 
+from football.analysis import coverage
 from football.analysis.filters import Filters, select
 
 #: What each run type counts as continuing it.
@@ -53,6 +54,10 @@ class Match:
     goals_for: int | None
     goals_against: int | None
     result: str | None
+    #: Whether the record knows this match to be the one that followed the
+    #: match before it. False across a gap in the record — a season held
+    #: only in part, or not held at all: see `analysis.coverage`.
+    follows: bool = True
 
 
 @dataclass(frozen=True)
@@ -78,8 +83,7 @@ class Run:
         """
         if self.kind not in _GAPS:
             return True
-        known = _REQUIRES.get(self.kind, lambda row: row.result is not None)
-        return all(match is not None and known(match)
+        return all(_usable(match, self.kind)
                    for match in (self.before, self.after))
 
     @property
@@ -95,8 +99,25 @@ class Run:
                 f"({self.start.season} to {self.end.season})")
 
 
+def _usable(match: Match | None, of: str) -> bool:
+    """Whether this match can speak to a run of `of`.
+
+    A match with no figure to read neither continues a run nor bounds one:
+    it is a hole in the sequence rather than a link in it.
+    """
+    if match is None:
+        return False
+    known = _REQUIRES.get(of, lambda row: row.result is not None)
+    return known(match)
+
+
 def matches_in_order(conn: sqlite3.Connection, filters: Filters) -> list[Match]:
-    """Every match under these filters, oldest first."""
+    """Every match under these filters, oldest first.
+
+    Each match is marked with whether the record can say it followed the
+    one before it — which it cannot across a season held only in part, or
+    a season not held at all.
+    """
     sql, params = select(
         """
         cm.date, cm.season, cm.competition, cm.opponent, cm.home_or_away,
@@ -105,7 +126,21 @@ def matches_in_order(conn: sqlite3.Connection, filters: Filters) -> list[Match]:
         filters,
         order="cm.date, cm.match_id",
     )
-    return [Match(*row) for row in conn.execute(sql, params).fetchall()]
+    rows = conn.execute(sql, params).fetchall()
+    incomplete = coverage.incomplete_seasons(conn, filters.club,
+                                             filters.competition)
+    absent = coverage.absent_seasons(conn, filters.club)
+
+    def follows(previous, season: str) -> bool:
+        """Whether the record can say this match came after the last one."""
+        if previous is None:
+            return False
+        return (season not in incomplete and previous not in incomplete
+                and not coverage.divides(previous, season, absent))
+
+    seasons = [None, *(row[1] for row in rows)]
+    return [Match(*row, follows=follows(previous, row[1]))
+            for previous, row in zip(seasons, rows)]
 
 
 def _scan(matches: list[Match], of: str):
@@ -115,14 +150,19 @@ def _scan(matches: list[Match], of: str):
     measured from the win that preceded it to the win that ended it.
     """
     continues = _CONTINUES[of]
-    known = _REQUIRES.get(of, lambda row: row.result is not None)
     current: list[Match] = []
     before: Match | None = None
 
     for index, match in enumerate(matches):
-        if known(match) and continues(match):
+        if current and not match.follows:
+            # The record cannot say this match came next, so the run ends
+            # here with nothing after it: how long it really ran is unknown.
+            yield Run(kind=of, length=len(current), start=current[0],
+                      end=current[-1], before=before, after=None)
+            current = []
+        if _usable(match, of) and continues(match):
             if not current:
-                before = matches[index - 1] if index else None
+                before = matches[index - 1] if match.follows else None
             current.append(match)
             continue
         if current:

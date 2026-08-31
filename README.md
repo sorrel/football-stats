@@ -56,6 +56,7 @@ football runs --of without-win --top 5   # the longest droughts, listed
 football extremes --by attendance        # record crowds
 football seasons                         # position and outcome per season
 football seasons --cups                  # how far each cup run went
+football coverage                        # seasons the record holds in part
 ```
 
 `--club` is **required** — there is no default, because with more than one
@@ -80,6 +81,13 @@ Two conventions worth knowing:
 - **Play-offs are an addendum to a league season**, not part of the table or
   that season's league record. They carry a tier, so a tier filter includes
   them — and any command whose result mixes the two says so.
+- **A run does not cross a gap in the record.** Two kinds of gap: a season
+  holding cup ties and no league programme (Brighton before 1920-21), and a
+  season holding nothing at all (Barrow's non-League decades, and both wars).
+  The club played those seasons; the record has not imported them, so matches
+  either side of one are not consecutive and no run joins them. `football
+  coverage` names the gaps and `runs` says when its answer stopped at one.
+  What this cannot see is a season imported in part.
 - **Answers state their coverage.** `extremes --by attendance` reports that it
   rests on 41 of 4,749 matches, because a record crowd drawn silently from
   0.9% of the data would be misleading.

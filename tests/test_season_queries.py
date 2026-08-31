@@ -1,3 +1,6 @@
+import tempfile
+from pathlib import Path
+
 import pytest
 
 from football import db, schema, store
@@ -91,7 +94,9 @@ def test_the_last_season_is_the_current_one_not_stayed(conn):
 
 def test_a_cup_run_reports_how_far_it_went(conn):
     runs = cup_runs(conn, "brighton-hove-albion")
-    assert runs == [("1982-83", "fa-cup", "Final", "Runners-up")]
+    # No league match is held for 1982-83, so the tier is unknown and the
+    # run is judged on neither: a run reaching the final either way.
+    assert runs == [("1982-83", "FA Cup", "Final", "Runners-up", "final")]
 
 
 def test_a_cup_run_that_ended_in_a_win_says_winners(tmp_path):
@@ -105,6 +110,70 @@ def test_a_cup_run_that_ended_in_a_win_says_winners(tmp_path):
         _match("1983-05-21", "1982-83", "fa-cup", "watford", 4, 0, round_="Final")])
     conn = db.build(tmp_path, tmp_path / "f.db")
     assert cup_runs(conn, "brighton-hove-albion")[0][3] == "Winners"
+    assert cup_runs(conn, "brighton-hove-albion")[0][4] == "winners"
+
+
+def test_the_top_four_rounds_are_each_their_own_category(tmp_path):
+    store.write_table(tmp_path, schema.CLUBS, [
+        {"slug": s, "name": s, "former_names": "", "english_league": "true",
+         "country": "England"} for s in ("brighton-hove-albion", "watford")])
+    store.write_table(tmp_path, schema.COMPETITIONS, [
+        _competition("fa-cup", "FA Cup", "domestic-cup")])
+    store.write_table(tmp_path, schema.VENUES, [])
+    store.write_matches(tmp_path, [
+        _match("1983-01-08", "1982-83", "fa-cup", "watford", 2, 1,
+               round_="Quarter-final")])
+    conn = db.build(tmp_path, tmp_path / "f.db")
+    assert cup_runs(conn, "brighton-hove-albion")[0][4] == "quarter-final"
+
+
+def test_an_early_exit_is_poor_for_a_league_one_or_two_club(tmp_path):
+    """League One and Two: an exit as late as round 1 is unremarkable, but
+    the record must hold a league season to know the level was that low."""
+    store.write_table(tmp_path, schema.CLUBS, [
+        {"slug": s, "name": s, "former_names": "", "english_league": "true",
+         "country": "England"} for s in ("brighton-hove-albion", "watford")])
+    store.write_table(tmp_path, schema.COMPETITIONS, [
+        _competition("division-three", "Division Three", "league"),
+        _competition("fa-cup", "FA Cup", "domestic-cup")])
+    store.write_table(tmp_path, schema.VENUES, [])
+    store.write_matches(tmp_path, [
+        _match("1982-09-04", "1982-83", "division-three", "watford", 1, 0, tier="3"),
+        _match("1983-01-08", "1982-83", "fa-cup", "watford", 0, 1, round_="Round 1")])
+    conn = db.build(tmp_path, tmp_path / "f.db")
+    assert cup_runs(conn, "brighton-hove-albion")[0][4] == "early-exit"
+
+
+def test_the_same_round_is_not_poor_for_a_top_flight_club(tmp_path):
+    """A round 1 exit from a First Division club is a letdown, but round 4
+    is not — only a Championship-or-above exit at round 3 or before is."""
+    store.write_table(tmp_path, schema.CLUBS, [
+        {"slug": s, "name": s, "former_names": "", "english_league": "true",
+         "country": "England"} for s in ("brighton-hove-albion", "watford")])
+    store.write_table(tmp_path, schema.COMPETITIONS, [
+        _competition("division-one", "Division One", "league"),
+        _competition("fa-cup", "FA Cup", "domestic-cup")])
+    store.write_table(tmp_path, schema.VENUES, [])
+    store.write_matches(tmp_path, [
+        _match("1982-09-04", "1982-83", "division-one", "watford", 1, 0, tier="1"),
+        _match("1983-01-08", "1982-83", "fa-cup", "watford", 2, 1, round_="Round 4")])
+    conn = db.build(tmp_path, tmp_path / "f.db")
+    assert cup_runs(conn, "brighton-hove-albion")[0][4] == ""
+
+
+def test_round_three_is_poor_for_a_top_flight_club(tmp_path):
+    store.write_table(tmp_path, schema.CLUBS, [
+        {"slug": s, "name": s, "former_names": "", "english_league": "true",
+         "country": "England"} for s in ("brighton-hove-albion", "watford")])
+    store.write_table(tmp_path, schema.COMPETITIONS, [
+        _competition("division-one", "Division One", "league"),
+        _competition("fa-cup", "FA Cup", "domestic-cup")])
+    store.write_table(tmp_path, schema.VENUES, [])
+    store.write_matches(tmp_path, [
+        _match("1982-09-04", "1982-83", "division-one", "watford", 1, 0, tier="1"),
+        _match("1983-01-08", "1982-83", "fa-cup", "watford", 0, 1, round_="Round 3")])
+    conn = db.build(tmp_path, tmp_path / "f.db")
+    assert cup_runs(conn, "brighton-hove-albion")[0][4] == "early-exit"
 
 
 def test_synonymous_rounds_share_a_rank():
@@ -125,3 +194,51 @@ def test_the_round_of_16_comes_before_the_quarter_final():
 def test_a_group_stage_comes_before_the_knockout_rounds():
     from football.analysis.seasons import _round_rank
     assert _round_rank("Group B") < _round_rank("Round of 16")
+
+
+def test_a_group_stage_is_shown_as_group_stage_not_its_own_letter():
+    """A supporter compares a season's group form to another's, not Group C
+    to Group F — the letter is a detail nobody asked this for."""
+    conn = _seed_cups(("europa-league", "Europa League", "europe"), [
+        _match("2023-09-14", "2023-24", "europa-league", "watford", 1, 1,
+               round_="Group F")])
+    assert cup_runs(conn, "brighton-hove-albion")[0][3] == "Group Stage"
+
+
+def test_two_cups_in_a_season_also_get_a_combined_row(tmp_path):
+    conn = _seed_cups(
+        [("fa-cup", "FA Cup", "domestic-cup"),
+         ("league-cup", "League Cup", "domestic-cup")],
+        [_match("1982-09-01", "1982-83", "fa-cup", "watford", 1, 0,
+                round_="Quarter-final"),
+         _match("1982-10-01", "1982-83", "league-cup", "arsenal", 0, 1,
+                round_="Round 2")])
+    runs = cup_runs(conn, "brighton-hove-albion")
+    labels = [row[1] for row in runs]
+    assert labels == ["FA Cup", "League Cup", "Combined"]
+    combined = runs[-1]
+    assert (combined[2], combined[3]) == ("Quarter-final", "Quarter-final")
+
+
+def test_a_lone_competition_gets_no_combined_row_of_its_own():
+    """It would only repeat the one entry already there."""
+    conn = _seed_cups(("fa-cup", "FA Cup", "domestic-cup"), [
+        _match("1982-09-01", "1982-83", "fa-cup", "watford", 1, 0,
+               round_="Quarter-final")])
+    runs = cup_runs(conn, "brighton-hove-albion")
+    assert [row[1] for row in runs] == ["FA Cup"]
+
+
+def _seed_cups(competitions, matches):
+    """A minimal database for one club, its opponents, and the given cups."""
+    club = "brighton-hove-albion"
+    opponents = {m["home_club"] for m in matches} | {m["away_club"] for m in matches}
+    tmp_path = Path(tempfile.mkdtemp())
+    store.write_table(tmp_path, schema.CLUBS, [
+        {"slug": s, "name": s, "former_names": "", "english_league": "true",
+         "country": "England"} for s in sorted(opponents | {club})])
+    comps = [competitions] if isinstance(competitions[0], str) else competitions
+    store.write_table(tmp_path, schema.COMPETITIONS, [_competition(*c) for c in comps])
+    store.write_table(tmp_path, schema.VENUES, [])
+    store.write_matches(tmp_path, matches)
+    return db.build(tmp_path, tmp_path / "f.db")

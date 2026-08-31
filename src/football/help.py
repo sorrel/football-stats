@@ -44,6 +44,7 @@ SECTIONS: list[Section] = [
             ("football clubs [name]", "List clubs, or find one by name."),
             ("football seasons", "League position and outcome per season."),
             ("football seasons --cups", "How far each cup run went."),
+            ("football coverage", "Gaps: seasons held in part, or not at all."),
             ("  --club <name>", "Required. Fuzzy: \"albion\" offers a choice."),
             ("  filters", "-c <comp>  --tier N  --side away  --day saturday"),
             ("", "--season-from 1979-80  --season-to 1983-84  --opponent <club>"),
@@ -72,8 +73,51 @@ SECTIONS: list[Section] = [
 ]
 
 
+class ColouredCommand(click.Command):
+    """A `click.Command` whose `--help` matches `ColouredGroup`'s style.
+
+    Click colours the top-level `football --help` through `ColouredGroup`
+    alone; every subcommand's own `--help` fell back to Click's default,
+    plain formatting. `ColouredGroup.command_class` below hands every
+    `@cli.command()` this class instead, so `football seasons --help` reads
+    the same way as `football --help` does: cyan bold headings, green
+    option names, dim descriptions.
+    """
+
+    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        pieces = self.collect_usage_pieces(ctx)
+        click.echo(click.style("Usage: ", fg="cyan", bold=True)
+                   + " ".join((ctx.command_path, *pieces)))
+        click.echo()
+
+        if self.help:
+            wrapped = click.wrap_text(self.help, width=formatter.width - 2,
+                                      preserve_paragraphs=True)
+            for line in wrapped.splitlines():
+                click.echo(click.style(f"  {line}", dim=True) if line else "")
+            click.echo()
+
+        records = [record for param in self.get_params(ctx)
+                  if (record := param.get_help_record(ctx))]
+        if records:
+            click.echo(click.style("Options:", fg="cyan", bold=True))
+            width = max(display_width(name) for name, _ in records)
+            indent = 2 + width + 2
+            for name, text in records:
+                padding = " " * (width - display_width(name))
+                wrapped = click.wrap_text(text, width=formatter.width - indent
+                                          ).splitlines() or [""]
+                click.echo("  " + click.style(name, fg="green") + padding
+                           + "  " + click.style(wrapped[0], dim=True))
+                for line in wrapped[1:]:
+                    click.echo(" " * indent + click.style(line, dim=True))
+
+
 class ColouredGroup(click.Group):
-    """A `click.Group` that prints the sectioned quick reference."""
+    """A `click.Group` that prints the sectioned quick reference, and hands
+    every command it registers `ColouredCommand` for its own `--help`."""
+
+    command_class = ColouredCommand
 
     def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         click.echo(

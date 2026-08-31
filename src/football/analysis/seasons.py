@@ -169,15 +169,66 @@ def _round_rank(name: str) -> int:
     return _GROUP_RANK if name.startswith("Group") else -1
 
 
-def cup_runs(conn: sqlite3.Connection, club: str) -> list[tuple[str, str, str, str]]:
-    """How far each cup run went: (season, competition, round, result).
+#: The round an early exit needs to reach before it stops being poor —
+#: tougher for a club playing Championship football or above, since more is
+#: expected of them than of one in League One or Two.
+_EARLY_EXIT_THRESHOLD = {"upper": _round_rank("Round 3"), "lower": _round_rank("Round 1")}
+
+
+def _cup_category(round_name: str, ending: str, tier: int | None) -> str:
+    """How a cup run reads: one of the best four rounds, a poor exit for the
+    level the club played at that season, or neither.
+
+    A tier we do not hold for that season says nothing about what was
+    expected, so it is judged on neither: a merely unknown level must not
+    read as a low one.
+    """
+    if ending == "Winners":
+        return "winners"
+    if round_name == "Final":
+        return "final"
+    if round_name in ("Semi-final", "Quarter-final"):
+        return round_name.lower()
+    if tier is not None:
+        threshold = (_EARLY_EXIT_THRESHOLD["upper"] if tier <= 2
+                     else _EARLY_EXIT_THRESHOLD["lower"])
+        if _round_rank(round_name) <= threshold:
+            return "early-exit"
+    return ""
+
+
+def _ending(round_name: str, result: str) -> str:
+    """How a furthest round reads: what happened there, not just its name.
+
+    A final's name alone is silent on whether it was won, and a group
+    stage's own letter or number is a detail nobody asked this for — a
+    supporter compares a season's group form to another season's, not
+    Group C to Group F.
+    """
+    if round_name == "Final":
+        return "Winners" if result == "W" else "Runners-up"
+    if round_name.startswith("Group"):
+        return "Group Stage"
+    return round_name
+
+
+def cup_runs(conn: sqlite3.Connection, club: str
+            ) -> list[tuple[str, str, str, str, str]]:
+    """How far each cup run went: (season, competition, round, result, category).
+
+    One row per competition the club entered that season, and — only when
+    there was more than one, so a lone entry is not repeated as its own
+    total — a `"Combined"` row for the furthest any of them reached: a
+    supporter's sense of "how did the cups go that year" is not tied to any
+    one of them.
 
     The result uses the final outcome, so a tie lost on penalties ends the
-    run — as it did in fact.
+    run — as it did in fact. `category` is `_cup_category`'s judgement of
+    the run, using the tier the club played at in the league that season.
     """
     rows = conn.execute(
         """
-        SELECT cm.season, cm.competition, cm.round, cm.final_result, cm.date
+        SELECT cm.season, cm.competition, c.name, cm.round, cm.final_result, cm.date
         FROM club_matches cm
         JOIN competitions c ON c.slug = cm.competition
         WHERE cm.club = ? AND c.type NOT IN ('league', 'play-off')
@@ -186,18 +237,29 @@ def cup_runs(conn: sqlite3.Connection, club: str) -> list[tuple[str, str, str, s
         (club,),
     ).fetchall()
 
-    furthest: dict[tuple[str, str], tuple[int, str, str]] = {}
-    for season, competition, round_name, result, _ in rows:
+    furthest: dict[tuple[str, str], tuple[int, str, str, str]] = {}
+    for season, competition, name, round_name, result, _ in rows:
         key = (season, competition)
         rank = _round_rank(round_name or "")
         if key not in furthest or rank >= furthest[key][0]:
-            furthest[key] = (rank, round_name or "", result or "")
+            furthest[key] = (rank, round_name or "", result or "", name or competition)
+
+    tiers = {season.season: season.tier for season in league_seasons(conn, club)}
+
+    def _row(season: str, label: str, round_name: str, result: str) -> tuple:
+        ending = _ending(round_name, result)
+        return (season, label, round_name, ending,
+                _cup_category(round_name, ending, tiers.get(season)))
+
+    by_season: dict[str, list[tuple[str, int, str, str, str]]] = {}
+    for (season, _competition), (rank, round_name, result, name) in furthest.items():
+        by_season.setdefault(season, []).append((name, rank, round_name, result))
 
     out = []
-    for (season, competition), (_, round_name, result) in sorted(furthest.items()):
-        if round_name == "Final":
-            ending = "Winners" if result == "W" else "Runners-up"
-        else:
-            ending = round_name
-        out.append((season, competition, round_name, ending))
+    for season, entries in sorted(by_season.items()):
+        for name, _rank, round_name, result in sorted(entries):
+            out.append(_row(season, name, round_name, result))
+        if len(entries) > 1:
+            _, rank, round_name, result = max(entries, key=lambda entry: entry[1])
+            out.append(_row(season, "Combined", round_name, result))
     return out

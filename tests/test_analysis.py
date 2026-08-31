@@ -152,6 +152,65 @@ def test_attendance_extremes_ignore_matches_with_none_recorded(conn):
     assert rows[0][7] == 40000
 
 
+def test_extremes_by_result_ranks_wins_by_margin(conn):
+    rows, _ = ex.extremes_by_result(conn, Filters(club=CLUB), "wins", limit=10)
+    assert [r[3] for r in rows] == ["wisbech-town", "watford", "arsenal"]
+
+
+def test_extremes_by_result_ranks_losses_by_margin_of_defeat(conn):
+    rows, _ = ex.extremes_by_result(conn, Filters(club=CLUB), "losses", limit=10)
+    assert [r[3] for r in rows] == ["everton", "arsenal"]
+
+
+def test_extremes_by_result_coverage_is_against_every_match_not_just_the_result(conn):
+    """A match with no recorded score cannot be sorted into either, so the
+    honest denominator is every match, not just the wins found."""
+    _, cover = ex.extremes_by_result(conn, Filters(club=CLUB), "wins", limit=10)
+    assert cover.total == 6
+
+
+def test_high_scoring_finds_what_is_left_once_wins_and_losses_are_shown(conn):
+    """Six matches: three wins, two losses, one draw. Excluding every win and
+    loss found above leaves only the draw."""
+    wins, _ = ex.extremes_by_result(conn, Filters(club=CLUB), "wins", limit=10)
+    losses, _ = ex.extremes_by_result(conn, Filters(club=CLUB), "losses", limit=10)
+    exclude = frozenset(row[-1] for row in [*wins, *losses])
+    rows, _ = ex.high_scoring(conn, Filters(club=CLUB), exclude, limit=10)
+    assert [r[3] for r in rows] == ["ipswich-town"]
+
+
+def test_high_scoring_surfaces_a_high_goal_match_the_top_margin_misses(tmp_path):
+    """A 6-5 win is nobody's biggest win by margin, but at eleven goals it is
+    still the highest-scoring match — once the 5-0 that beat it on margin is
+    excluded, this is what is left to find."""
+    conn = _seed(tmp_path, [
+        _m("1982-08-28", "arsenal", 6, 5),
+        _m("1982-09-04", "everton", 5, 0),
+    ])
+    wins, _ = ex.extremes_by_result(conn, Filters(club=CLUB), "wins", limit=1)
+    assert [r[3] for r in wins] == ["everton"], "the biggest margin, not the most goals"
+    exclude = frozenset(row[-1] for row in wins)
+    rows, _ = ex.high_scoring(conn, Filters(club=CLUB), exclude, limit=5)
+    assert [r[3] for r in rows] == ["arsenal"]
+
+
+def test_high_scoring_excludes_a_match_even_when_nothing_else_qualifies(tmp_path):
+    conn = _seed(tmp_path, [_m("1982-08-28", "arsenal", 6, 5)])
+    wins, _ = ex.extremes_by_result(conn, Filters(club=CLUB), "wins", limit=10)
+    exclude = frozenset(row[-1] for row in wins)
+    rows, _ = ex.high_scoring(conn, Filters(club=CLUB), exclude, limit=10)
+    assert rows == []
+
+
+def test_extremes_show_names_not_slugs(tmp_path):
+    conn = _seed(tmp_path, [_m("1982-08-28", "arsenal", 1, 0)])
+    conn.execute("UPDATE clubs SET name = 'The Gunners' WHERE slug = 'arsenal'")
+    conn.execute("UPDATE competitions SET name = 'The League' "
+                 "WHERE slug = 'division-one'")
+    rows, _ = ex.extremes(conn, Filters(club=CLUB), by="margin", limit=1)
+    assert (rows[0][2], rows[0][3]) == ("The League", "The Gunners")
+
+
 def test_a_run_without_scoring_counts_the_matches_that_drew_a_blank(tmp_path):
     conn = _seed(tmp_path, [
         _m("1982-08-28", "arsenal", 1, 0),

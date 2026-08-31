@@ -18,10 +18,11 @@ from dataclasses import replace
 import sys
 
 from .analysis import clubs as club_matching
+from .analysis import coverage as coverage_analysis
 from .analysis import filters as filters_module
 from .analysis import records, runs
 from .analysis import seasons as season_analysis
-from .analysis.extremes import MEASURES
+from .analysis.extremes import MEASURES, RESULTS
 from .analysis.filters import RUN_TYPES, SIDES, Filters
 
 
@@ -173,25 +174,33 @@ _OUTCOME_STYLE = (
     ("promoted-via-play-offs", {"fg": "bright_green", "bold": True}),
     ("play-offs-lost", {"fg": "yellow"}),
     ("promoted", {"fg": "bright_green", "bold": True}),
-    ("relegated", {"fg": "bright_yellow", "bold": True}),
+    ("runner-up", {"fg": 252, "bold": True}),
+    ("relegated", {"fg": "red", "bold": True}),
     ("left-the-league", {"fg": "bright_yellow"}),
     ("current", {"dim": True}),
     ("war", {"dim": True}),
 )
 
 
-def display_outcome(outcome: str, position: int | None = None) -> str:
+def display_outcome(outcome: str, position: int | None = None,
+                    tier: int | None = None) -> str:
     """How an outcome reads in the table.
 
     Finishing top is reported as winning the division, whatever followed:
     it is the fact a supporter would name first. Promotion remains visible
     in the tier of the season below.
 
+    Finishing second is only worth naming in the top flight — the runners-up
+    medal that actually gets remembered — so it is marked there and nowhere
+    else; second in League Two is just a promotion, already covered.
+
     An unchanged season shows a dash — sixty rows of "stayed" is noise, and
     the eye wants the exceptions.
     """
     if position == 1:
         return "champions"
+    if position == 2 and tier == 1:
+        return "runner-up"
     return "-" if outcome == "stayed" else outcome
 
 
@@ -201,6 +210,33 @@ def style_outcome(line: str) -> str:
         if line.endswith(outcome):
             return line[: -len(outcome)] + click.style(outcome, **style)
     return line
+
+
+#: The top four rounds, each a deeper shade of green than the last — named
+#: "green" and "bright_green" are only two colours between them, not four,
+#: so these reach into the 256-colour palette for steps in between rather
+#: than repeating one of the two. Plus the one poor result: an exit early
+#: enough to be a letdown for the level the club played at that season.
+#: Anything else — the rounds in between — is not remarkable enough either
+#: way to be worth marking.
+_CUP_OUTCOME_STYLE = {
+    "quarter-final": {"fg": 22},                  # a dark, forest green
+    "semi-final": {"fg": 34},                     # a fuller green
+    "final": {"fg": 40},                          # brighter still
+    "winners": {"fg": 46, "bold": True},           # the brightest green there is
+    "early-exit": {"fg": "red", "bold": True},
+}
+
+
+def style_cup_line(line: str, ending: str, category: str) -> str:
+    """Colour a cup row's outcome, known exactly rather than matched by text.
+
+    Unlike a league outcome, a cup round's colour depends on the tier the
+    club played at that season as well as the word itself, so the category
+    a row carries is trusted outright rather than looked up from its text.
+    """
+    style = _CUP_OUTCOME_STYLE.get(category)
+    return line[: -len(ending)] + click.style(ending, **style) if style else line
 
 
 def is_fully_held(conn, slug: str) -> bool:
@@ -274,6 +310,14 @@ _RUN_LABELS = {
     "clean-sheets": "clean sheets",
 }
 
+#: How each result reads in a table, in the order the sections are shown.
+_RESULT_LABELS = {
+    "wins": "Wins",
+    "losses": "Losses",
+}
+
+_HIGH_SCORING_LABEL = "Highest scoring"
+
 _RUNS_FOOTNOTE = (
     "\nA run is broken by a match with no known result: an unbeaten "
     "sequence through a match nobody knows the outcome of is an assumption, "
@@ -282,6 +326,33 @@ _RUNS_FOOTNOTE = (
     "next, and any other run across its own matches. A drought the record "
     "cannot see the end of is marked +, meaning at least that long."
 )
+
+
+def _coverage_note(conn, filters) -> str | None:
+    """What the record is missing, where that changes the answer.
+
+    The principle the rest of the tool already follows — an answer states
+    its coverage — applied to sequences. A run that stopped at a gap in the
+    record looks like a run that stopped at a defeat unless we say so.
+    """
+    gaps = _gaps(conn, filters)
+    if not gaps:
+        return None
+    return ("\nThe record has gaps: "
+            + "; ".join(f"{held} for {', '.join(stretches)}"
+                        for held, stretches in gaps)
+            + ". The club played those seasons, so no run crosses them.")
+
+
+def _gaps(conn, filters) -> list[tuple[str, list[str]]]:
+    """The stretches the record does not hold, and what it holds instead."""
+    found = [
+        ("cup football only", coverage_analysis.incomplete_seasons(
+            conn, filters.club, filters.competition)),
+        ("nothing at all", coverage_analysis.absent_seasons(conn, filters.club)),
+    ]
+    return [(held, coverage_analysis.stretches(seasons))
+            for held, seasons in found if seasons]
 
 
 def _summary_cells(found: list[list[runs.Run | None]]) -> list[list[str]]:
@@ -336,8 +407,43 @@ def _heading(filters: Filters, title: str, conn=None) -> None:
             "for their full record.", fg="yellow"))
 
 
+def _sides(filters: Filters, split: bool, *, neutral: bool = False,
+           combined: bool = True) -> list[tuple[str, Filters]]:
+    """The (label, filters) pairs a table is built across.
+
+    An explicit --side has already answered the question, so it is reported
+    on its own rather than alongside a breakdown that would repeat it. Every
+    other caller wants the same partition — home, away, and optionally
+    neutral, with or without a leading combined/total row of the unsplit
+    filters — so this is the one place that logic lives.
+    """
+    if filters.side:
+        return [(filters.side, filters)]
+    if not split:
+        return [("combined", filters)] if combined else []
+    sides = [("home", replace(filters, side="home")),
+             ("away", replace(filters, side="away"))]
+    if neutral:
+        sides.append(("neutral", replace(filters, side="neutral")))
+    return [("combined", filters), *sides] if combined else sides
+
+
 def register(cli, connect):
     """Add the analysis commands to `cli`. `connect` opens the database."""
+
+    def _populated_sides(conn, filters: Filters
+                          ) -> list[tuple[str, Filters, records.Record]]:
+        """Each home/away/neutral split under `filters` that has matches.
+
+        A neutral ground is its own row, never folded into away: a cup final
+        at a neutral ground is not an away match, whoever is listed first.
+        """
+        found = []
+        for label, at in _sides(filters, split=True, neutral=True, combined=False):
+            result = records.record(conn, at)
+            if result.played:
+                found.append((label, at, result))
+        return found
 
     @cli.command()
     @filter_options()
@@ -354,22 +460,13 @@ def register(cli, connect):
                     record.lost, record.goals_for, record.goals_against,
                     record.goal_difference, f"{record.win_percentage:.1f}"]
 
-        # Home, away and neutral, then the total. A neutral ground is its own
-        # line and never folded into away: a cup final at Wembley is not an
-        # away match, whoever is listed first.
-        #
-        # A --side filter is the user having already chosen; splitting would
-        # override their filter and report matches they excluded.
-        if filters.side:
-            lines = [_line(filters.side, result)]
-        else:
-            lines = []
-            for side in ("home", "away", "neutral"):
-                split = records.record(conn, replace(filters, side=side))
-                if split.played:
-                    lines.append(_line(side, split))
-            if len(lines) != 1:
-                lines.append(_line("total", result))
+        # Home, away and neutral, then the total. A --side filter is the user
+        # having already chosen; splitting would override their filter and
+        # report matches they excluded, so _populated_sides reports it alone.
+        lines = [_line(label, split)
+                 for label, _, split in _populated_sides(conn, filters)]
+        if not filters.side and len(lines) != 1:
+            lines.append(_line("total", result))
 
         click.echo(present.render_table(
             ["venue", "played", "won", "drawn", "lost", "for", "against",
@@ -435,23 +532,15 @@ def register(cli, connect):
                        "against", "replays", "aet", "pens", "win %"]
 
         def _venue_rows(these, cup=False):
-            """Home, away and neutral under `these` filters.
-
-            Neutral is its own row, never folded into away: a cup final at a
-            neutral ground is not an away match, whoever is listed first.
-            """
+            """Home, away and neutral under `these` filters."""
             rows = []
-            for side in ("home", "away", "neutral"):
-                at = replace(these, side=side)
-                split = records.record(conn, at)
-                if not split.played:
-                    continue  # a permanent row of zeros is noise
+            for label, at, split in _populated_sides(conn, these):
                 if not cup:
-                    rows.append([side, *_figures(split)])
+                    rows.append([label, *_figures(split)])
                     continue
                 extras = records.cup_extras(conn, at)
                 played, *rest, percentage = _figures(split)
-                rows.append([side, extras.contests, played, *rest, extras.replays,
+                rows.append([label, extras.contests, played, *rest, extras.replays,
                              extras.extra_time, extras.penalties, percentage])
             return rows
 
@@ -554,21 +643,10 @@ def register(cli, connect):
             _heading(filters, f"Longest runs — {_RUN_LABELS[of]}", conn)
             for side, sided in _sides(filters, split):
                 _runs_listing(conn, sided, of, top, side if split else None)
+        note = _coverage_note(conn, filters)
+        if note:
+            click.echo(click.style(note, fg="yellow"))
         click.echo(click.style(_RUNS_FOOTNOTE, dim=True))
-
-    def _sides(filters, split):
-        """The (label, filters) pairs a runs table is built from.
-
-        An explicit --side has already answered the question, so it is
-        reported on its own rather than alongside a breakdown that would
-        repeat it.
-        """
-        if filters.side:
-            return [(filters.side, filters)]
-        if not split:
-            return [("combined", filters)]
-        return [("combined", filters), ("home", replace(filters, side="home")),
-                ("away", replace(filters, side="away"))]
 
     def _runs_summary(conn, filters):
         """Every kind of run, each side by side across the venues."""
@@ -599,6 +677,41 @@ def register(cli, connect):
              for r in found],
             caption=caption))
 
+    @cli.command(name="coverage")
+    @filter_options()
+    @prepared(connect)
+    def coverage_command(conn, filters):
+        """Which seasons the record holds only in part.
+
+        A club playing cup ties was in a league that season. Where we hold
+        the ties and no league match at all, a whole programme is missing —
+        and any answer that counts one match as following another is wrong
+        across it.
+        """
+        _heading(filters, "Coverage", conn)
+        gaps = _gaps(conn, filters)
+        if not gaps:
+            click.echo("\n" + "Every season between the club's first match "
+                       "and its last is held in full.")
+            return
+        rows = sorted(([stretch, held,
+                        _matches_between(conn, filters.club, stretch)]
+                       for held, stretches in gaps for stretch in stretches),
+                      key=lambda row: row[0])
+        click.echo(present.render_table(["seasons", "held", "matches"], rows))
+        click.echo(click.style(
+            "\nThe club played these seasons; the record does not have them. "
+            "No run crosses them, and no total for them is a full total.",
+            dim=True))
+
+    def _matches_between(conn, club, stretch):
+        """How many matches the record does hold across a stretch."""
+        first, _, last = stretch.partition(" to ")
+        return conn.execute(
+            "SELECT COUNT(*) FROM club_matches WHERE club = ? "
+            "AND season BETWEEN ? AND ?",
+            (club, first, last or first)).fetchone()[0]
+
     @cli.command(name="clubs")
     @click.argument("search", required=False)
     @click.pass_context
@@ -613,21 +726,46 @@ def register(cli, connect):
         click.echo(present.render_table(
             ["name", "slug"], [[c.name, c.slug] for c in found]))
 
+    def _cup_rows(conn, filters, split):
+        """Every cup run, or just each season's combined figure.
+
+        A season with only one competition has no combined row of its own to
+        fall back to — it would only repeat the one entry — so its lone run
+        stands in for it rather than being dropped.
+        """
+        found = season_analysis.cup_runs(conn, filters.club)
+        if split:
+            return found
+        by_season: dict[str, list[tuple]] = {}
+        for row in found:
+            by_season.setdefault(row[0], []).append(row)
+        return [next((row for row in rows if row[1] == "Combined"), rows[0])
+                for rows in by_season.values()]
+
     @cli.command(name="seasons")
     @click.option("--cups", is_flag=True, help="Show cup runs instead.")
+    @click.option("--split/--no-split", default=True, show_default=True,
+                  help="With --cups, each competition as well as the combined "
+                   "figure for the season.")
     @filter_options()
     @prepared(connect)
-    def seasons_command(conn, filters, cups):
+    def seasons_command(conn, filters, cups, split):
         """League position and outcome for each season."""
         if cups:
             _heading(filters, "Cup runs", conn)
-            runs_found = season_analysis.cup_runs(conn, filters.club)
+            runs_found = _cup_rows(conn, filters, split)
             if not runs_found:
                 click.echo("\n" + "No cup runs recorded.")
                 return
-            click.echo(present.render_table(
-                ["season", "competition", "furthest round", "outcome"],
-                [list(row) for row in runs_found]))
+            table = present.render_table(
+                ["season", "competition", "outcome"],
+                [[season, competition, ending]
+                 for season, competition, _round, ending, _cat in runs_found])
+            lines = table.splitlines()
+            data = lines[-len(runs_found):]
+            styled = [style_cup_line(line, ending, category)
+                     for line, (*_, ending, category) in zip(data, runs_found)]
+            click.echo("\n".join([*lines[: -len(runs_found)], *styled]))
             return
 
         _heading(filters, "Seasons", conn)
@@ -640,7 +778,7 @@ def register(cli, connect):
              "play-offs", "outcome"],
             [[s.season, s.competition, s.tier, s.position, s.points,
               "yes" if s.played_play_offs else "",
-              display_outcome(o, s.position)]
+              display_outcome(o, s.position, s.tier)]
              for s, o in rows])
         click.echo("\n".join(style_outcome(line) for line in table.splitlines()))
         click.echo(click.style(
@@ -648,20 +786,65 @@ def register(cli, connect):
             "table or that season's league record.", dim=True))
 
     @cli.command(name="extremes")
-    @click.option("--by", type=click.Choice(MEASURES), default="margin",
-                  show_default=True, help="What to rank by.")
+    @click.option("--by", type=click.Choice(MEASURES), default=None,
+                  help="Rank by one measure instead: margin, defeat, goals, "
+                   "scored, or attendance. Omit for wins, losses and the "
+                   "highest-scoring matches together.")
+    @click.option("--split/--no-split", default=True, show_default=True,
+                  help="A table each for combined, home and away.")
     @click.option("--top", default=10, show_default=True, help="How many to list.")
     @filter_options()
     @prepared(connect)
-    def extremes_command(conn, filters, by, top):
-        """Biggest wins and defeats, highest scoring, record crowds."""
-        rows, cover = ex.extremes(conn, filters, by=by, limit=top)
-        _heading(filters, f"Extremes — by {by}", conn)
+    def extremes_command(conn, filters, by, split, top):
+        """Biggest wins and defeats, highest-scoring matches, record crowds.
+
+        Every result at once, or one measure ranked in full with --by.
+        Either way the answer comes combined, at home and away.
+        """
+        if by is None:
+            _heading(filters, "Extremes", conn)
+            sides = _sides(filters, split)
+            # Computed once per side and kept, not just shown: a 6-5 win is
+            # nobody's biggest win by margin, but it is still high-scoring,
+            # so the third section needs to know what the first two already
+            # said before it can say what is left.
+            by_result = {result: {side: ex.extremes_by_result(conn, sided, result,
+                                                               limit=top)
+                                  for side, sided in sides}
+                        for result in RESULTS}
+            for result in RESULTS:
+                for side, _sided in sides:
+                    rows, cover = by_result[result][side]
+                    caption = (f"{_RESULT_LABELS[result]} — {side}" if split
+                               else _RESULT_LABELS[result])
+                    _extremes_table(rows, cover, caption)
+            for side, sided in sides:
+                exclude_ids = frozenset(
+                    row[-1] for result in RESULTS
+                    for row in by_result[result][side][0])
+                rows, cover = ex.high_scoring(conn, sided, exclude_ids, limit=top)
+                caption = (f"{_HIGH_SCORING_LABEL} — {side}" if split
+                           else _HIGH_SCORING_LABEL)
+                _extremes_table(rows, cover, caption)
+        else:
+            _heading(filters, f"Extremes — by {by}", conn)
+            for side, sided in _sides(filters, split):
+                rows, cover = ex.extremes(conn, sided, by=by, limit=top)
+                _extremes_table(rows, cover, side if split else None)
+
+    def _extremes_table(rows, cover, caption):
+        """One table of matches, or a word that there are none, with its coverage.
+
+        Each row carries a trailing match id so a later section can tell it
+        was already shown here; that id is never itself a column to show.
+        """
         if not rows:
-            click.echo("\n" + "Nothing matches those filters.")
+            click.echo("\n" + "Nothing matches those filters."
+                       + (f" — {caption}" if caption else ""))
             return
         click.echo(present.render_table(
             ["date", "season", "competition", "opponent", "h/a",
-             "for", "against", "crowd"], rows))
+             "for", "against", "crowd"], [row[:-1] for row in rows],
+            caption=click.style(caption, fg="cyan") if caption else None))
         style = {"fg": "yellow"} if cover.is_partial else {"dim": True}
         click.echo(click.style(f"\n{cover.describe()}", **style))
