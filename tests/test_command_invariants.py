@@ -8,7 +8,7 @@ were an answer. This fails instead.
 import pytest
 from click.testing import CliRunner
 
-from football import schema, store
+from football import cli_stats, schema, store
 from football.cli import cli
 from football.parse.base import blank_row
 
@@ -67,3 +67,32 @@ def test_every_command_accepts_a_partial_name(tmp_path, command):
 def test_every_command_names_the_club_it_answered_about(tmp_path, command):
     result = _invoke(tmp_path, command, "arsenal")
     assert "Arsenal" in result.output
+
+
+def _every_command(command, path=()):
+    """The whole command tree, each with the path that reaches it."""
+    yield path, command
+    for name, sub in getattr(command, "commands", {}).items():
+        yield from _every_command(sub, (*path, name))
+
+
+def test_no_command_declares_a_parameter_name_twice():
+    """Two parameters of one name share a single slot in Click's parse
+    results, so whichever fills it discards the other's value silently.
+    Click 8.5 warns about this; this fails instead.
+    """
+    clashes = {}
+    for path, command in _every_command(cli):
+        names = [parameter.name for parameter in command.params]
+        repeated = sorted({name for name in names if names.count(name) > 1})
+        if repeated:
+            clashes[" ".join(path) or "cli"] = repeated
+    assert not clashes
+
+
+def test_excluding_an_unknown_filter_is_refused():
+    """A typo in `exclude` would otherwise leave the filter attached, which
+    is the collision this guards against, and say nothing.
+    """
+    with pytest.raises(ValueError, match="oponent"):
+        cli_stats.filter_options(exclude=("oponent",))

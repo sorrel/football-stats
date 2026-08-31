@@ -25,42 +25,60 @@ from .analysis.extremes import MEASURES
 from .analysis.filters import RUN_TYPES, SIDES, Filters
 
 
-#: The shared filter vocabulary, declared once. `filter_options` attaches
-#: these to a command and `prepared` removes them again after building the
-#: Filters, so the two cannot drift apart into two lists of the same thing.
-FILTER_OPTIONS = [
-    click.option("--club", default=None, envvar="FOOTBALL_CLUB",
-                 help="Whose record to report. Required; may be set with "
-                  "the FOOTBALL_CLUB environment variable."),
-    click.option("--competition", "-c", default=None,
-                 help="Competition slug, e.g. fa-cup."),
-    click.option("--tier", type=int, default=None,
-                 help="League tier, 1 to 4."),
-    click.option("--type", "comp_type", default=None,
-                 help="Competition type: league, play-off, europe, or a "
-                  "cup's own slug. Each cup is its own type."),
-    click.option("--opponent", "-o", default=None, help="Opponent slug."),
-    click.option("--venue", default=None, help="Venue slug."),
-    click.option("--side", type=click.Choice(SIDES), default=None,
-                 help="Home, away, or on a neutral ground."),
-    click.option("--season-from", default=None, help="First season, e.g. 1979-80."),
-    click.option("--season-to", default=None, help="Last season, e.g. 1982-83."),
-    click.option("--day", default=None, help="Day of the week."),
-    click.option("--english-league-only", is_flag=True,
-                 help="Exclude non-League and foreign opposition."),
-]
+#: The shared filter vocabulary, declared once and keyed by the parameter
+#: name each option binds to. `filter_options` attaches these to a command
+#: and `prepared` removes them again after building the Filters, so the two
+#: cannot drift apart into two lists of the same thing.
+FILTER_OPTIONS = {
+    "club": click.option("--club", default=None, envvar="FOOTBALL_CLUB",
+                         help="Whose record to report. Required; may be set "
+                          "with the FOOTBALL_CLUB environment variable."),
+    "competition": click.option("--competition", "-c", default=None,
+                                help="Competition slug, e.g. fa-cup."),
+    "tier": click.option("--tier", type=int, default=None,
+                         help="League tier, 1 to 4."),
+    "comp_type": click.option("--type", "comp_type", default=None,
+                              help="Competition type: league, play-off, "
+                               "europe, or a cup's own slug. Each cup is its "
+                               "own type."),
+    "opponent": click.option("--opponent", "-o", default=None,
+                             help="Opponent slug."),
+    "venue": click.option("--venue", default=None, help="Venue slug."),
+    "side": click.option("--side", type=click.Choice(SIDES), default=None,
+                         help="Home, away, or on a neutral ground."),
+    "season_from": click.option("--season-from", default=None,
+                                help="First season, e.g. 1979-80."),
+    "season_to": click.option("--season-to", default=None,
+                              help="Last season, e.g. 1982-83."),
+    "day": click.option("--day", default=None, help="Day of the week."),
+    "english_league_only": click.option("--english-league-only", is_flag=True,
+                                        help="Exclude non-League and foreign "
+                                         "opposition."),
+}
 
 #: The parameter names those options bind to.
-_FILTER_NAMES = ("club", "competition", "tier", "comp_type", "opponent",
-                 "venue", "side", "season_from", "season_to", "day",
-                 "english_league_only")
+_FILTER_NAMES = tuple(FILTER_OPTIONS)
 
 
-def filter_options(command):
-    """Attach the shared filter vocabulary to a command."""
-    for option in reversed(FILTER_OPTIONS):
-        command = option(command)
-    return command
+def filter_options(*, exclude=()):
+    """Attach the shared filter vocabulary to a command.
+
+    `exclude` drops a filter the command already states another way. Click
+    keys its parse results by parameter name, so two parameters of one name
+    share a single slot: whichever fills it discards the other's value
+    without a word. `h2h` names its opponent positionally, so it must not
+    also carry `--opponent`.
+    """
+    unknown = sorted(set(exclude) - set(FILTER_OPTIONS))
+    if unknown:
+        raise ValueError(f"not filter options: {unknown}")
+
+    def decorate(command):
+        for name, option in reversed(FILTER_OPTIONS.items()):
+            if name not in exclude:
+                command = option(command)
+        return command
+    return decorate
 
 
 def _candidates(conn) -> list[club_matching.Candidate]:
@@ -264,7 +282,7 @@ def register(cli, connect):
     """Add the analysis commands to `cli`. `connect` opens the database."""
 
     @cli.command()
-    @filter_options
+    @filter_options()
     @prepared(connect)
     def record(conn, filters):
         """Played, won, drawn, lost, and goals."""
@@ -320,7 +338,7 @@ def register(cli, connect):
     @cli.command()
     @click.argument("opponent")
     @click.option("--list", "list_all", is_flag=True, help="Show every meeting.")
-    @filter_options
+    @filter_options(exclude=("opponent",))
     @click.pass_context
     def h2h(ctx, opponent, list_all, **kwargs):
         """The record against one opponent, split by where it was played."""
@@ -461,7 +479,7 @@ def register(cli, connect):
     @click.option("--of", type=click.Choice(RUN_TYPES), default="unbeaten",
                   show_default=True, help="What kind of run.")
     @click.option("--top", default=5, show_default=True, help="How many to list.")
-    @filter_options
+    @filter_options()
     @prepared(connect)
     def runs_command(conn, filters, of, top):
         """Longest sequences: unbeaten, wins, losses, clean sheets."""
@@ -496,7 +514,7 @@ def register(cli, connect):
 
     @cli.command(name="seasons")
     @click.option("--cups", is_flag=True, help="Show cup runs instead.")
-    @filter_options
+    @filter_options()
     @prepared(connect)
     def seasons_command(conn, filters, cups):
         """League position and outcome for each season."""
@@ -532,7 +550,7 @@ def register(cli, connect):
     @click.option("--by", type=click.Choice(MEASURES), default="margin",
                   show_default=True, help="What to rank by.")
     @click.option("--top", default=10, show_default=True, help="How many to list.")
-    @filter_options
+    @filter_options()
     @prepared(connect)
     def extremes_command(conn, filters, by, top):
         """Biggest wins and defeats, highest scoring, record crowds."""
