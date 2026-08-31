@@ -536,16 +536,16 @@ def register(cli, connect):
     @cli.command(name="runs")
     @click.option("--of", type=click.Choice(RUN_TYPES), default=None,
                   help="Drill into one kind of run. Omit for all of them.")
-    @click.option("--split", is_flag=True,
-                  help="With --of, a table for each of combined, home, away.")
+    @click.option("--split/--no-split", default=True, show_default=True,
+                  help="With --of, a table each for combined, home and away.")
     @click.option("--top", default=5, show_default=True, help="How many to list.")
     @filter_options()
     @prepared(connect)
     def runs_command(conn, filters, of, split, top):
         """Longest sequences: unbeaten, wins, droughts, clean sheets.
 
-        With no --of, every kind of run at once, each shown combined, at
-        home and away.
+        Every kind of run at once, or one kind listed in full with --of.
+        Either way the answer comes combined, at home and away.
         """
         if of is None:
             _heading(filters, "Longest runs", conn)
@@ -587,6 +587,8 @@ def register(cli, connect):
         caption = click.style(f"{_RUN_LABELS[of]} — {side}",
                               fg="cyan") if side else None
         if not found:
+            # Said rather than silently skipped: a missing table reads as an
+            # oversight, where "no run of wins — away" is an answer.
             click.echo("\n" + (f"No run of {_RUN_LABELS[of]}"
                                + (f" — {side}" if side else "")
                                + " under those filters."))

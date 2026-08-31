@@ -87,12 +87,18 @@ def _lengths(output, label):
     return [cell.split(" ")[0] for cell in _row(output, label)[1:]]
 
 
-def _listing(output):
-    """The rows of a detail table, as cells."""
-    rows = []
+def _listing(output, side="combined"):
+    """The rows of one side's detail table, as cells.
+
+    `side=None` takes every data row, for the single table --no-split gives.
+    """
+    rows, inside = [], side is None
     for line in output.splitlines():
+        if side is not None and line and not line[0].isspace():
+            if " — " in line:
+                inside = line.strip().endswith(f"— {side}")
         cells = [cell.strip() for cell in line.split("|")]
-        if len(cells) > 1 and cells[0].isdigit():
+        if inside and len(cells) > 1 and cells[0].isdigit():
             rows.append(cells)
     return rows
 
@@ -163,10 +169,40 @@ def test_an_unfinished_drought_is_marked_as_a_lower_bound(tmp_path):
     assert [row[-1] for row in _listing(output)] == ["7+", "7+"]
 
 
-def test_splitting_a_named_kind_gives_a_table_for_each_side(tmp_path):
-    output = _run(tmp_path, "--of", "unbeaten", "--split")
-    assert output.count("unbeaten") >= 3
-    assert "home" in output and "away" in output
+def test_a_named_kind_is_broken_down_by_side_without_being_asked(tmp_path):
+    output = _run(tmp_path, "--of", "unbeaten")
+    for side in ("combined", "home", "away"):
+        assert f"unbeaten — {side}" in output
+
+
+def test_each_side_is_listed_from_its_own_matches(tmp_path):
+    """Four unbeaten all told, three of them at home, two away."""
+    output = _run(tmp_path, "--of", "unbeaten")
+    assert _listing(output, "combined")[0][0] == "4"
+    assert _listing(output, "home")[0][0] == "3"
+    assert _listing(output, "away")[0][0] == "2"
+
+
+def test_no_split_gives_the_one_combined_table(tmp_path):
+    output = _run(tmp_path, "--of", "unbeaten", "--no-split")
+    assert "— combined" not in output and "— home" not in output
+    assert _listing(output, side=None)[0][0] == "4"
+
+
+def test_an_explicit_side_lists_that_side_alone(tmp_path):
+    output = _run(tmp_path, "--of", "unbeaten", "--side", "home")
+    assert "— combined" not in output and "— away" not in output
+    assert _listing(output, "home")[0][0] == "3"
+
+
+def test_a_side_with_no_such_run_says_so_rather_than_going_quiet(tmp_path):
+    """Every side gets its say, including the one with nothing to report."""
+    output = _run(tmp_path, "--of", "wins", matches=[
+        _m("1982-08-28", "arsenal", 2, 0),
+        _m("1982-09-04", "watford", 1, 0),
+        _m("1982-09-11", "everton", 0, 1, home=False),
+    ])
+    assert "No run of wins — away" in output
 
 
 def test_the_summary_figures_line_up_under_one_another(tmp_path):

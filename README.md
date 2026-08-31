@@ -72,8 +72,9 @@ Two conventions worth knowing:
   lost on penalties ends an unbeaten run. Aggregate records use the
   90-minute result, as league tables always have. `runs` on its own answers
   every run question at once — unbeaten, wins, draws, losses, the droughts
-  without a win and without a goal, and clean sheets — each shown combined,
-  at home and away. A drought is measured in matches and in days from the
+  without a win and without a goal, and clean sheets — and `--of` lists one
+  of them in full. Either way the answer comes combined, at home and away;
+  `--no-split` collapses the listing back to one table. A drought is measured in matches and in days from the
   last win to the next; one the record cannot see the end of is marked `+`,
   meaning at least that long.
 - **Play-offs are an addendum to a league season**, not part of the table or
