@@ -284,6 +284,31 @@ _RUNS_FOOTNOTE = (
 )
 
 
+def _summary_cells(found: list[list[runs.Run | None]]) -> list[list[str]]:
+    """Render the summary grid with each column's figures lined up.
+
+    The figure and the season it fell in share a cell, which leaves the
+    figures ragged: 6 and 22 start in the same place, so their units do not.
+    A column of quantities is meant to be read down, so each is padded to the
+    widest figure in its own column — which `present` cannot do for us,
+    knowing only that the cell is text.
+    """
+    lengths = [["" if run is None else str(run.length) for run in row]
+               for row in found]
+    widths = [max(len(row[column]) for row in lengths)
+              for column in range(len(lengths[0]))]
+    return [
+        [
+            # An em dash, not a nought: a club that has never won three in a
+            # row has no such run, which is not a run of length nil.
+            "—" if run is None
+            else f"{length:>{width}} ({_seasons(run)})"
+            for run, length, width in zip(row, texts, widths)
+        ]
+        for row, texts in zip(found, lengths)
+    ]
+
+
 def _seasons(run: runs.Run) -> str:
     """The season a run belongs to, or the two it stretched between."""
     return (run.start.season if run.start.season == run.end.season
@@ -548,16 +573,10 @@ def register(cli, connect):
     def _runs_summary(conn, filters):
         """Every kind of run, each side by side across the venues."""
         columns = _sides(filters, split=True)
-        rows = []
-        for of in RUN_TYPES:
-            cells = []
-            for _, sided in columns:
-                run = runs.longest(runs.matches_in_order(conn, sided), of)
-                # An em dash, not a nought: a club that has never won three
-                # in a row has no such run, which is not a run of length nil.
-                cells.append("—" if run is None
-                             else f"{run.length} ({_seasons(run)})")
-            rows.append([_RUN_LABELS[of], *cells])
+        found = [[runs.longest(runs.matches_in_order(conn, sided), of)
+                  for _, sided in columns] for of in RUN_TYPES]
+        rows = [[_RUN_LABELS[of], *cells]
+                for of, cells in zip(RUN_TYPES, _summary_cells(found))]
         click.echo(present.render_table(
             ["run", *(label for label, _ in columns)], rows))
 

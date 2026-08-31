@@ -14,6 +14,9 @@ from football.parse.base import blank_row
 
 CLUB = "brighton-hove-albion"
 
+_RUN_LABELS = ("unbeaten", "wins", "draws", "losses", "without a win",
+               "without a goal", "clean sheets")
+
 
 def _m(date, opponent, gf, ga, home=True, **extra):
     row = blank_row(schema.MATCHES)
@@ -164,3 +167,24 @@ def test_splitting_a_named_kind_gives_a_table_for_each_side(tmp_path):
     output = _run(tmp_path, "--of", "unbeaten", "--split")
     assert output.count("unbeaten") >= 3
     assert "home" in output and "away" in output
+
+
+def test_the_summary_figures_line_up_under_one_another(tmp_path):
+    """A column of figures is meant to be read down, so units sit under units."""
+    matches = [_m(f"1982-{month:02d}-01", "arsenal", 2, 0)
+               for month in range(1, 11)]
+    matches.append(_m("1982-11-01", "watford", 0, 1))
+    output = _run(tmp_path, matches=matches)
+    assert _lengths(output, "unbeaten")[0] == "10"
+    assert _lengths(output, "losses")[0] == "1", "the fixture must mix widths"
+
+    columns = {}
+    for line in output.splitlines():
+        cells = line.split("|")
+        if len(cells) > 1 and cells[0].strip() in _RUN_LABELS:
+            for index, cell in enumerate(cells[1:]):
+                if "(" in cell:
+                    columns.setdefault(index, set()).add(cell.index("("))
+    assert columns, "no figures found to line up"
+    for index, positions in columns.items():
+        assert len(positions) == 1, f"column {index} does not line up: {positions}"
