@@ -207,3 +207,111 @@ def test_the_coverage_command_names_the_seasons_held_at_all(tmp_path):
     result = runner.invoke(cli, [*_args(tmp_path), "coverage", "--club", CLUB])
     assert result.exit_code == 0, result.output
     assert "1972-73 to 2015-16" in result.output
+
+
+# --- the timeline, and what "held in full" means ----------------------------
+
+#: A season either side of the First World War, and nothing recorded for
+#: any season in between — which the war years alone can explain.
+WAR_GAP = [
+    _m("1913-08-30", "chelsea", 1, 0, "1913-14"),
+    _m("1920-09-04", "fulham", 2, 1, "1920-21"),
+]
+
+#: The club's last recorded season is cup football only — the league has
+#: not yet resumed, so nothing after it can be called held in full.
+ENDS_IN_CUP_ONLY = [
+    _m("1921-09-10", "arsenal", 1, 0, "1921-22"),
+    _m("1922-01-14", "fulham", 2, 0, "1922-23", competition="fa-cup"),
+]
+
+
+def test_timeline_marks_a_season_the_record_skips_entirely_absent(tmp_path):
+    conn = _build(tmp_path, LEAGUE_THEN_NOTHING)
+    line = dict(coverage.timeline(conn, CLUB))
+    assert line["1970-71"] == "held"
+    assert line["1972-73"] == "absent"
+    assert line["2016-17"] == "held"
+
+
+def test_timeline_marks_a_cup_only_season_partial(tmp_path):
+    conn = _build(tmp_path)
+    line = dict(coverage.timeline(conn, CLUB))
+    assert line["1907-08"] == "partial"
+    assert line["1921-22"] == "held"
+
+
+def test_timeline_marks_the_war_years_war_not_absent(tmp_path):
+    """1914-15 is a genuine gap — the League completed that season before
+    suspending — so only 1915-16 to 1919-20 is war."""
+    conn = _build(tmp_path, WAR_GAP)
+    line = dict(coverage.timeline(conn, CLUB))
+    assert line["1914-15"] == "absent"
+    assert line["1915-16"] == "war"
+    assert line["1919-20"] == "war"
+
+
+def test_held_in_full_from_the_season_after_the_last_gap(tmp_path):
+    """2016-17 is an isolated held season with more absence either side of
+    it, so the clean run only really starts at 2020-21."""
+    conn = _build(tmp_path, LEAGUE_THEN_NOTHING)
+    assert coverage.held_in_full_from(conn, CLUB) == "2020-21"
+
+
+def test_held_in_full_from_treats_a_war_as_no_gap_at_all(tmp_path):
+    """Nothing is missing across a war — there was nothing to hold — so it
+    does not break the trailing run the way a real gap would."""
+    conn = _build(tmp_path, WAR_GAP)
+    assert coverage.held_in_full_from(conn, CLUB) == "1915-16"
+
+
+def test_held_in_full_from_is_none_when_the_last_season_is_only_partly_held(tmp_path):
+    conn = _build(tmp_path, ENDS_IN_CUP_ONLY)
+    assert coverage.held_in_full_from(conn, CLUB) is None
+
+
+# --- the coverage command's fuller picture ----------------------------------
+
+def _invoke_with(tmp_path, matches, *command):
+    _seed(tmp_path / "data", matches)
+    runner = CliRunner()
+    runner.invoke(cli, [*_args(tmp_path), "rebuild"])
+    result = runner.invoke(cli, [*_args(tmp_path), *command, "--club", CLUB])
+    assert result.exit_code == 0, result.output
+    return result.output
+
+
+def test_the_coverage_command_tells_war_apart_from_a_real_gap(tmp_path):
+    """1914-15 is a genuine gap — the League played it out before
+    suspending — so it is "nothing at all" while 1915-16 to 1919-20, the
+    war proper, is told apart as "war"."""
+    output = _invoke_with(tmp_path, WAR_GAP, "coverage")
+    assert "1915-16 to 1919-20 | war" in output
+    assert "1914-15            | nothing at all" in output
+    assert "no football was played" in output.lower()
+
+
+def test_the_coverage_command_says_what_is_held_in_full(tmp_path):
+    output = _invoke_with(tmp_path, LEAGUE_THEN_NOTHING, "coverage")
+    assert "Held in full from 2020-21 onwards" in output
+
+
+def test_the_coverage_command_says_nothing_is_held_in_full_mid_gap(tmp_path):
+    """The record's own last season is cup football only, so nothing after
+    it can honestly be called a clean run."""
+    output = _invoke_with(tmp_path, ENDS_IN_CUP_ONLY, "coverage")
+    assert "Held in full" not in output
+
+
+def test_the_coverage_command_shows_a_season_by_season_strip(tmp_path):
+    output = _invoke_with(tmp_path, LEAGUE_THEN_NOTHING, "coverage")
+    assert "held in full" in output
+    assert "not held" in output
+    assert "1970-71" in output and "2020-21" in output
+
+
+def test_the_coverage_command_reports_recorded_figures(tmp_path):
+    output = _invoke_with(tmp_path, CUP_ONLY_THEN_LEAGUE, "coverage")
+    assert "Recorded figures" in output
+    assert "crowd" in output and "scores" in output and "cards" in output
+    assert "1976-77" in output

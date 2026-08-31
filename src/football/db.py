@@ -20,6 +20,8 @@ _PERSPECTIVE = """
 SELECT
     m.match_id, m.date, m.season, m.competition, m.round, m.venue, m.neutral,
     m.attendance, m.kickoff,
+    m.{us}_yellows AS yellows_for, m.{them}_yellows AS yellows_against,
+    m.{us}_reds AS reds_for, m.{them}_reds AS reds_against,
     CASE CAST(strftime('%w', m.date) AS INTEGER)
         WHEN 0 THEN 'Sunday'    WHEN 1 THEN 'Monday'   WHEN 2 THEN 'Tuesday'
         WHEN 3 THEN 'Wednesday' WHEN 4 THEN 'Thursday' WHEN 5 THEN 'Friday'

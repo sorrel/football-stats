@@ -21,7 +21,7 @@ OUTCOMES = ("promoted", "promoted-via-play-offs", "play-offs-lost",
 #: is wartime; any other gap is a club that left the League — Accrington
 #: Stanley resigned in 1962, Barrow and Workington were voted out — and must
 #: not be labelled war.
-_WARS = ((1915, 1919), (1939, 1946))
+WARS = ((1915, 1919), (1939, 1946))
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ def _gap_reason(earlier: str, later: str) -> str:
         start, resume = int(earlier[:4]) + 1, int(later[:4])
     except (ValueError, IndexError):
         return "left-the-league"
-    for war_start, war_end in _WARS:
+    for war_start, war_end in WARS:
         if start <= war_end and resume >= war_start:
             return "war"
     return "left-the-league"

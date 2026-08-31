@@ -333,23 +333,33 @@ def _coverage_note(conn, filters) -> str | None:
 
     The principle the rest of the tool already follows — an answer states
     its coverage — applied to sequences. A run that stopped at a gap in the
-    record looks like a run that stopped at a defeat unless we say so.
+    record looks like a run that stopped at a defeat unless we say so. A war
+    is not a gap in what the record holds — there was no football to hold —
+    but it is still a stretch no run may safely be said to cross.
     """
     gaps = _gaps(conn, filters)
     if not gaps:
         return None
-    return ("\nThe record has gaps: "
-            + "; ".join(f"{held} for {', '.join(stretches)}"
-                        for held, stretches in gaps)
-            + ". The club played those seasons, so no run crosses them.")
+    parts = [(f"no football was played for {', '.join(stretches)}"
+              if held == "war" else f"{held} for {', '.join(stretches)}")
+             for held, stretches in gaps]
+    return "\nThe record has gaps: " + "; ".join(parts) + ". No run crosses them."
 
 
 def _gaps(conn, filters) -> list[tuple[str, list[str]]]:
-    """The stretches the record does not hold, and what it holds instead."""
+    """The stretches the record does not hold, and what it holds instead.
+
+    The war years are told apart from the rest: nothing is missing from a
+    war, since nothing of the kind this asks about happened, which is a
+    different fact from a source simply failing to catalogue what did.
+    """
+    absent = coverage_analysis.absent_seasons(conn, filters.club)
+    war = coverage_analysis.war_seasons(absent)
     found = [
         ("cup football only", coverage_analysis.incomplete_seasons(
             conn, filters.club, filters.competition)),
-        ("nothing at all", coverage_analysis.absent_seasons(conn, filters.club)),
+        ("war", war),
+        ("nothing at all", absent - war),
     ]
     return [(held, coverage_analysis.stretches(seasons))
             for held, seasons in found if seasons]
@@ -395,7 +405,8 @@ def _heading(filters: Filters, title: str, conn=None) -> None:
     name = club_name(conn, filters.club) if conn is not None else filters.club
     click.echo()
     click.echo(click.style(title, fg="cyan", bold=True))
-    click.echo(click.style(f"  {name} — {filters.describe()}", dim=True))
+    click.echo("  " + click.style(name, fg="bright_yellow")
+               + click.style(f" — {filters.describe()}", dim=True))
     if conn is not None and not is_fully_held(conn, filters.club):
         # A club held only as an opponent has just its meetings with the
         # clubs we do hold. Reported as a record it looks complete, and is
@@ -681,28 +692,117 @@ def register(cli, connect):
     @filter_options()
     @prepared(connect)
     def coverage_command(conn, filters):
-        """Which seasons the record holds only in part.
+        """Which seasons the record holds only in part, and how complete the
+        figures are within the seasons it does hold.
 
         A club playing cup ties was in a league that season. Where we hold
         the ties and no league match at all, a whole programme is missing —
         and any answer that counts one match as following another is wrong
-        across it.
+        across it. The war years are told apart from that: nothing is
+        missing from a war, since there was no football to hold.
         """
         _heading(filters, "Coverage", conn)
+        strip = _timeline_strip(conn, filters.club)
+        if strip:
+            click.echo()
+            click.echo(strip)
+            click.echo(_timeline_legend())
+
         gaps = _gaps(conn, filters)
         if not gaps:
             click.echo("\n" + "Every season between the club's first match "
                        "and its last is held in full.")
-            return
-        rows = sorted(([stretch, held,
-                        _matches_between(conn, filters.club, stretch)]
-                       for held, stretches in gaps for stretch in stretches),
-                      key=lambda row: row[0])
-        click.echo(present.render_table(["seasons", "held", "matches"], rows))
+        else:
+            rows = sorted(([stretch, held,
+                            _matches_between(conn, filters.club, stretch)]
+                           for held, stretches in gaps for stretch in stretches),
+                          key=lambda row: row[0])
+            click.echo(present.render_table(["seasons", "held", "matches"], rows))
+            if any(held != "war" for held, _ in gaps):
+                click.echo(click.style(
+                    "\nThe club played these seasons; the record does not "
+                    "have them. No run crosses them, and no total for them "
+                    "is a full total.", dim=True))
+            if any(held == "war" for held, _ in gaps):
+                click.echo(click.style(
+                    "\nNo football was played through the war years shown: "
+                    "there is nothing to hold, not something missing. "
+                    "No run crosses them either.", dim=True))
+            held_from = coverage_analysis.held_in_full_from(conn, filters.club)
+            if held_from:
+                click.echo(click.style(
+                    f"\nHeld in full from {held_from} onwards "
+                    "(all leagues and cups).", fg="bright_green"))
+
+        click.echo()
+        click.echo(click.style("Recorded figures", fg="cyan", bold=True))
+        for label, column in (("crowd", "cm.attendance"), ("scores", "cm.goals_for")):
+            league, cups = _split_coverage(conn, filters, column)
+            click.echo(f"  {label:<7} league  {_bar(league)}")
+            click.echo(f"  {'':<7} cups    {_bar(cups)}")
+        cards_from = coverage_analysis.CARDS_FROM
+        cards_filters = replace(filters,
+                                extra=(*filters.extra, f"cm.season >= '{cards_from}'"))
+        cards = ex.coverage(conn, cards_filters, "cm.yellows_for")
+        click.echo(f"  {'cards':<7}         {_bar(cards)}")
         click.echo(click.style(
-            "\nThe club played these seasons; the record does not have them. "
-            "No run crosses them, and no total for them is a full total.",
-            dim=True))
+            f"\nCards: yellow and red cards were not used in English "
+            f"football before {cards_from}, so their coverage is judged "
+            "only from then, not against every match.", dim=True))
+
+    #: One character per status a season in the timeline can carry, in the
+    #: order `coverage.TIMELINE_STATUSES` ranks them, best to worst.
+    _TIMELINE_GLYPHS = {
+        "held": ("█", {"fg": "bright_green"}),
+        "partial": ("▒", {"fg": "yellow"}),
+        "war": ("·", {"dim": True}),
+        "absent": ("×", {"fg": "red"}),
+    }
+
+    _TIMELINE_LABELS = {
+        "held": "held in full", "partial": "cup football only",
+        "war": "war — nothing to hold", "absent": "not held",
+    }
+
+    def _timeline_strip(conn, club) -> str | None:
+        """A season-by-season strip: solid where the record is held in
+        full, shaded through cup-only seasons, a dot through a war, a cross
+        where a season is missing outright."""
+        line = coverage_analysis.timeline(conn, club)
+        if not line:
+            return None
+        strip = ""
+        for _, status in line:
+            glyph, style = _TIMELINE_GLYPHS[status]
+            strip += click.style(glyph, **style)
+        return f"  {line[0][0]} {strip} {line[-1][0]}"
+
+    def _timeline_legend() -> str:
+        return "  " + "   ".join(
+            click.style(glyph, **style) + f" {_TIMELINE_LABELS[status]}"
+            for status, (glyph, style) in _TIMELINE_GLYPHS.items())
+
+    def _split_coverage(conn, filters, column):
+        """The same coverage question, asked of the league and the cups
+        apart — a crowd recorded for every league match says nothing about
+        whether it was recorded for cup ties too."""
+        league = replace(filters, extra=(*filters.extra, "comp.type = 'league'"))
+        cups = replace(filters,
+                       extra=(*filters.extra, "comp.type NOT IN ('league', 'play-off')"))
+        return ex.coverage(conn, league, column), ex.coverage(conn, cups, column)
+
+    def _bar(cov, width=16) -> str:
+        """A compact bar: filled share of `width`, coloured by how complete
+        it is, with the percentage and raw figures alongside."""
+        if not cov.total:
+            return click.style("n/a", dim=True)
+        share = 100.0 * cov.available / cov.total
+        filled = round(width * cov.available / cov.total)
+        bar = "█" * filled + "░" * (width - filled)
+        style = ({"fg": "bright_green"} if share >= 90
+                 else {"fg": "yellow"} if share >= 40 else {"fg": "red"})
+        return (click.style(bar, **style) + f" {share:3.0f}% "
+                + click.style(f"({cov.available:,} of {cov.total:,})", dim=True))
 
     def _matches_between(conn, club, stretch):
         """How many matches the record does hold across a stretch."""

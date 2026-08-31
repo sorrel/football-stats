@@ -66,6 +66,17 @@ def test_club_matches_view_shows_both_sides_without_duplicating_storage(tmp_path
     assert conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0] == 1
 
 
+def test_cards_are_swapped_for_against_the_same_way_goals_are(tmp_path):
+    _minimal_data(tmp_path, [_match(
+        home_yellows="2", away_yellows="3", home_reds="1", away_reds="0")])
+    conn = db.build(tmp_path, tmp_path / "football.db")
+    rows = {row[0]: row[1:] for row in conn.execute(
+        "SELECT home_or_away, yellows_for, yellows_against, reds_for, "
+        "reds_against FROM club_matches")}
+    assert rows["H"] == (2, 3, 1, 0)
+    assert rows["A"] == (3, 2, 0, 1)
+
+
 def test_result_is_decided_after_ninety_minutes(tmp_path):
     _minimal_data(tmp_path, [_match(ft_home="1", ft_away="0", aet_home="", aet_away="")])
     conn = db.build(tmp_path, tmp_path / "football.db")
