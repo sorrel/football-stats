@@ -1,0 +1,8 @@
+# No data is published from this repository. See README.
+data/
+build/
+cache/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

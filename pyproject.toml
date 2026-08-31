@@ -1,0 +1,23 @@
+[project]
+name = "football-results"
+version = "0.1.0"
+description = "A local database of English football results"
+requires-python = ">=3.12"
+dependencies = ["click>=8.0.0"]
+
+[project.scripts]
+football = "football.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/football"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
