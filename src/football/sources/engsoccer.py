@@ -66,6 +66,14 @@ _REGIONAL = {
     "3N": ("division-three-north", "Third Division North"),
 }
 
+#: Before the play-off system began in 1986-87, promotion and relegation
+#: between Divisions One and Two was sometimes settled by a Test Match
+#: series between the clubs concerned — not tied to a single tier the way
+#: every other play-off is, so engsoccerdata marks the "division" column
+#: with this literal string rather than a number.
+_TEST_MATCH = "test match"
+_TEST_MATCH_SLUG = "test-matches"
+
 
 def league_competition(tier: str, season_start: str | int,
                        division: str = "") -> tuple[str, str, int]:
@@ -104,6 +112,8 @@ def parse_venue(text: str) -> tuple[str, str, str]:
 #: as such would distort every league record. They get their own competition
 #: per tier, named for the era, e.g. "Championship Play-offs".
 def playoff_competition(tier: str, season_start: str | int) -> tuple[str, str]:
+    if _clean(tier).lower() == _TEST_MATCH:
+        return _TEST_MATCH_SLUG, "Test Matches"
     _, league_name, _ = league_competition(tier, season_start)
     name = f"{league_name} Play-offs"
     return slugify(name), name
@@ -199,7 +209,11 @@ def playoff_match(record: dict[str, str]) -> dict[str, str]:
     slug, _ = playoff_competition(record["division"], record["Season"])
     row = _base_row(record["Date"], season, record["home"], record["visitor"], slug)
     row["round"] = round_name(record["round"])
-    row["tier"] = _clean(record.get("division", ""))
+    # A Test Match decided promotion between two tiers at once, so no
+    # single number belongs here — `tier` is a typed int column, and the
+    # two sides' own tiers (htier/vtier) do not agree in general.
+    division = _clean(record.get("division", ""))
+    row["tier"] = "" if division.lower() == _TEST_MATCH else division
     row["leg"] = _leg_from_tie(record.get("tie", ""))
     row["is_replay"] = "true" if _is_replay_tie(record.get("tie", "")) else ""
     row["attendance"] = parse_attendance(record.get("attendance", ""))
@@ -319,7 +333,7 @@ def competition_type(slug: str) -> str:
     """
     if slug in _LEAGUE_SLUGS:
         return "league"
-    if slug.endswith("play-offs"):
+    if slug.endswith("play-offs") or slug == _TEST_MATCH_SLUG:
         return "play-off"
     if slug in _EUROPEAN:
         return "europe"
@@ -333,6 +347,7 @@ _SPECIAL_NAMES = {
     "europa-league": "UEFA Europa League",
     "champions-league": "UEFA Champions League",
     "conference-league": "UEFA Europa Conference League",
+    _TEST_MATCH_SLUG: "Test Matches",
 }
 
 

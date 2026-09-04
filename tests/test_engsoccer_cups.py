@@ -38,6 +38,29 @@ def test_play_off_competitions_are_named_for_their_era():
     assert e.playoff_competition("2", 1990)[0] == "division-two-play-offs"
 
 
+def test_a_pre_1898_test_match_is_not_read_as_a_numeric_tier():
+    """West Bromwich Albion v Manchester City, 1896: engsoccerdata marks
+    the division column "test match" rather than a number, since a Test
+    Match decided promotion between two tiers rather than belonging to
+    one — league_competition's int(tier) must not be asked to parse it."""
+    assert e.playoff_competition("test match", 1895) == (
+        "test-matches", "Test Matches")
+
+
+def test_a_test_match_row_carries_no_single_tier():
+    """`tier` is a typed int column; no one number is right for a match
+    between two different divisions, so it is left blank rather than
+    holding the literal string engsoccerdata uses."""
+    row = e.playoff_match(_playoff(division="test match", htier="2", vtier="1"))
+    assert row["competition"] == "test-matches"
+    assert row["tier"] == ""
+
+
+def test_test_matches_are_typed_as_a_play_off():
+    assert e.competition_type("test-matches") == "play-off"
+    assert e.competition_name("test-matches") == "Test Matches"
+
+
 def test_the_two_legs_of_a_semi_final_are_recorded_as_legs():
     first = e.playoff_match(_playoff(tie="leg1"))
     second = e.playoff_match(_playoff(tie="leg2", Date="1991-05-22",

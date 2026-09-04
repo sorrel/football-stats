@@ -318,6 +318,57 @@ def register(cli, resolve_club):
         elif report.total_writes:
             click.echo("\nRun `football rebuild` to load the changes.")
 
+    @cli.command(name="collect")
+    @click.option("--club", default=None, envvar="FOOTBALL_CLUB",
+                  help="Whose data to collect. Required.")
+    @click.option("--budget", default=200, show_default=True,
+                  help="Most pages to fetch per source in this run. It "
+                       "resumes where it stopped, so a large job can be "
+                       "done over several runs.")
+    @click.option("--dry-run", is_flag=True,
+                  help="Report what each source would change and write "
+                       "nothing.")
+    @click.option("--force", is_flag=True,
+                  help="Write even with uncommitted changes in the data "
+                       "directory. Only when you mean to lose them.")
+    @click.pass_context
+    def collect_command(ctx, club, budget, dry_run, force):
+        """Fetch and import one club from every available source.
+
+        Runs `fetch` then `import` for each source the registry currently
+        lists as available, in the order `sources` shows them — so a source
+        added later, or one that stops being available, changes what this
+        does without changing how it is called.
+        """
+        conn = _open(ctx.obj["data_dir"], ctx.obj["db_path"])
+        club = resolve_for_import(resolve_club, conn, club)
+
+        sources = [source for source in registry.all_sources() if source.available]
+        click.echo(f"Collecting {club} from {len(sources)} source(s): "
+                   f"{', '.join(source.name for source in sources)}.")
+
+        failed = []
+        for source in sources:
+            click.echo()
+            click.echo(click.style(f"== {source.name} ==", fg="cyan", bold=True))
+            try:
+                ctx.invoke(fetch_command, source_name=source.name, club=club,
+                          budget=budget)
+                ctx.invoke(import_command, source_name=source.name, club=club,
+                          dry_run=dry_run, force=force)
+            except click.ClickException as exc:
+                failed.append(source.name)
+                click.echo(click.style(f"  {exc.message}", fg="red"))
+
+        click.echo()
+        if failed:
+            click.echo(click.style(
+                f"{len(failed)} of {len(sources)} source(s) could not be "
+                f"collected: {', '.join(failed)}. The rest were.",
+                fg="yellow"))
+        if not dry_run and len(failed) < len(sources):
+            click.echo("Run `football rebuild` to load the changes.")
+
 
 def _require(name: str):
     source = registry.get(name)

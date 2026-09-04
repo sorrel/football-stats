@@ -690,8 +690,8 @@ def register(cli, connect):
 
     @cli.command(name="coverage")
     @filter_options()
-    @prepared(connect)
-    def coverage_command(conn, filters):
+    @click.pass_context
+    def coverage_command(ctx, **kwargs):
         """Which seasons the record holds only in part, and how complete the
         figures are within the seasons it does hold.
 
@@ -700,7 +700,31 @@ def register(cli, connect):
         and any answer that counts one match as following another is wrong
         across it. The war years are told apart from that: nothing is
         missing from a war, since there was no football to hold.
+
+        Without --club, this is a question about the whole database rather
+        than one club's record, so it shows every imported club's coverage
+        side by side instead — the same grid as `football clubs --coverage`.
         """
+        conn = connect(ctx)
+        if not kwargs.get("club"):
+            other = {name: value for name, value in kwargs.items()
+                     if name != "club" and value not in (None, False, ())}
+            if other:
+                raise click.ClickException(
+                    "Which club? Filters narrow one club's record; without "
+                    "--club there's no record to narrow.\nPass --club <name>, "
+                    "or drop the filters to see every club's coverage.")
+            found = sorted(_candidates(conn), key=lambda c: c.name)
+            if not found:
+                click.echo("No clubs in this database yet.")
+                return
+            _render_coverage_grid(conn, found)
+            return
+        kwargs["club"] = resolve_club(conn, kwargs["club"])
+        filters = build_filters(**kwargs)
+        _coverage_report(conn, filters)
+
+    def _coverage_report(conn, filters):
         _heading(filters, "Coverage", conn)
         strip = _timeline_strip(conn, filters.club)
         if strip:
@@ -764,18 +788,30 @@ def register(cli, connect):
         "war": "war — nothing to hold", "absent": "not held",
     }
 
+    def _timeline_parts(conn, club) -> tuple[str, str, str, int] | None:
+        """The first season, the coloured strip itself, the last season,
+        and the strip's length in seasons (not its width on screen, which
+        colour codes would throw off) — split apart so a caller lining
+        several clubs up in columns can pad what it needs to before
+        adding colour, and pad the bar itself to a common length so a
+        shorter one does not pull the end season in under a longer one."""
+        line = coverage_analysis.timeline(conn, club)
+        if not line:
+            return None
+        strip = "".join(click.style(glyph, **style)
+                        for glyph, style in
+                        (_TIMELINE_GLYPHS[status] for _, status in line))
+        return line[0][0], strip, line[-1][0], len(line)
+
     def _timeline_strip(conn, club) -> str | None:
         """A season-by-season strip: solid where the record is held in
         full, shaded through cup-only seasons, a dot through a war, a cross
         where a season is missing outright."""
-        line = coverage_analysis.timeline(conn, club)
-        if not line:
+        parts = _timeline_parts(conn, club)
+        if not parts:
             return None
-        strip = ""
-        for _, status in line:
-            glyph, style = _TIMELINE_GLYPHS[status]
-            strip += click.style(glyph, **style)
-        return f"  {line[0][0]} {strip} {line[-1][0]}"
+        first, strip, last, _ = parts
+        return f"  {first} {strip} {last}"
 
     def _timeline_legend() -> str:
         return "  " + "   ".join(
@@ -812,10 +848,53 @@ def register(cli, connect):
             "AND season BETWEEN ? AND ?",
             (club, first, last or first)).fetchone()[0]
 
+    def _render_coverage_grid(conn, found):
+        """Every imported club's coverage timeline, lined up on a shared
+        season axis so a gap in one club's history reads straight down
+        against what the others were doing at the time."""
+        imported = [c for c in found if is_fully_held(conn, c.slug)]
+        if not imported:
+            click.echo("None of these have been imported yet. Run "
+                       "`football collect --club <name>` for one.")
+            return
+        # That shared axis needs the earliest first season and latest last
+        # season across the whole list — Crystal Palace reaches back to
+        # 1872-73, decades before Arsenal's record starts — with blank
+        # space either side of a club's own bar out to those edges. Blank,
+        # not a glyph: a season before a club existed is not a gap in its
+        # record.
+        club_parts = [(club, _timeline_parts(conn, club.slug))
+                      for club in imported]
+        held = [parts for _, parts in club_parts if parts]
+        name_width = max(present.display_width(c.name) for c in imported)
+        season_width = max((present.display_width(parts[0])
+                           for parts in held), default=0)
+        first_year = min((int(parts[0][:4]) for parts in held), default=0)
+        last_year = max((int(parts[2][:4]) for parts in held), default=0)
+        click.echo()
+        for club, parts in club_parts:
+            name_pad = " " * (name_width - present.display_width(club.name))
+            if not parts:
+                click.echo(click.style(club.name, fg="bright_yellow")
+                           + name_pad + "  no matches held")
+                continue
+            first, strip, last, _count = parts
+            season_pad = " " * (season_width - present.display_width(first))
+            left_pad = " " * (int(first[:4]) - first_year)
+            right_pad = " " * (last_year - int(last[:4]))
+            click.echo(click.style(club.name, fg="bright_yellow") + name_pad
+                       + f"  {season_pad}{first} "
+                         f"{left_pad}{strip}{right_pad} {last}")
+        click.echo()
+        click.echo(_timeline_legend())
+
     @cli.command(name="clubs")
     @click.argument("search", required=False)
+    @click.option("--coverage", is_flag=True,
+                  help="Show each imported club's season-by-season coverage "
+                       "instead of listing names and slugs.")
     @click.pass_context
-    def clubs_command(ctx, search):
+    def clubs_command(ctx, search, coverage):
         """List the clubs, optionally filtered by name."""
         conn = connect(ctx)
         found = (club_matching.find_clubs(_candidates(conn), search) if search
@@ -823,6 +902,11 @@ def register(cli, connect):
         if not found:
             click.echo(f"Nothing matching {search!r}.")
             return
+
+        if coverage:
+            _render_coverage_grid(conn, found)
+            return
+
         click.echo(present.render_table(
             ["name", "slug"], [[c.name, c.slug] for c in found]))
 
