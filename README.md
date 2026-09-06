@@ -41,6 +41,20 @@ With those set, `football record` works from any directory. Put the exports
 in `~/.zshrc` to keep them. `uv tool uninstall football-results` undoes the
 install (the package is named `football-results`; the command is `football`).
 
+### Shell completion
+
+Tab completion (subcommands, options) comes from Click and needs `football`
+installed on your PATH as above — it can't attach to `uv run football`,
+because the word your shell sees is `uv`, not `football`. Once installed, add
+this to `~/.zshrc` (or the bash equivalent, `bash_source`):
+
+```bash
+eval "$(_FOOTBALL_COMPLETE=zsh_source football)"
+```
+
+Re-run `uv tool install --editable . --force` after pulling changes that add
+or rename commands, then open a new shell.
+
 ## Asking questions
 
 Five questions, one shared filter vocabulary — so "the biggest win, in the FA
