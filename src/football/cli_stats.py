@@ -910,34 +910,15 @@ def register(cli, connect):
         click.echo(present.render_table(
             ["name", "slug"], [[c.name, c.slug] for c in found]))
 
-    def _cup_rows(conn, filters, split):
-        """Every cup run, or just each season's combined figure.
-
-        A season with only one competition has no combined row of its own to
-        fall back to — it would only repeat the one entry — so its lone run
-        stands in for it rather than being dropped.
-        """
-        found = season_analysis.cup_runs(conn, filters.club)
-        if split:
-            return found
-        by_season: dict[str, list[tuple]] = {}
-        for row in found:
-            by_season.setdefault(row[0], []).append(row)
-        return [next((row for row in rows if row[1] == "Combined"), rows[0])
-                for rows in by_season.values()]
-
     @cli.command(name="seasons")
     @click.option("--cups", is_flag=True, help="Show cup runs instead.")
-    @click.option("--split/--no-split", default=True, show_default=True,
-                  help="With --cups, each competition as well as the combined "
-                   "figure for the season.")
     @filter_options()
     @prepared(connect)
-    def seasons_command(conn, filters, cups, split):
+    def seasons_command(conn, filters, cups):
         """League position and outcome for each season."""
         if cups:
             _heading(filters, "Cup runs", conn)
-            runs_found = _cup_rows(conn, filters, split)
+            runs_found = season_analysis.cup_runs(conn, filters.club)
             if not runs_found:
                 click.echo("\n" + "No cup runs recorded.")
                 return

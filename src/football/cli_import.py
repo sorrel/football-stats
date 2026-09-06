@@ -161,7 +161,12 @@ def register(cli, resolve_club):
                        "stopped, so a large job can be done over several runs.")
     @click.pass_context
     def fetch_command(ctx, source_name, club, budget):
-        """Download a source's pages into the cache, slowly."""
+        """Download a source's pages into the cache, slowly.
+
+        Returns the `CrawlResult`, or `None` if there was nothing to fetch —
+        `collect` uses this to fetch a source to completion across several
+        budget-limited passes rather than a single one.
+        """
         source = _require(source_name)
         conn = _open(ctx.obj["data_dir"], ctx.obj["db_path"])
         club = resolve_for_import(resolve_club, conn, club)
@@ -172,7 +177,7 @@ def register(cli, resolve_club):
         click.echo(f"{len(keys)} pages, {len(outstanding)} not yet cached.")
         if not outstanding:
             click.echo("Nothing to fetch.")
-            return
+            return None
 
         http = HttpSource()
         pace = http.delay_for(outstanding[0])
@@ -207,6 +212,7 @@ def register(cli, resolve_club):
             click.echo(click.style(
                 f"{len(failures)} pages could not be fetched; they are not "
                 "cached, so running again will retry them.", fg="yellow"))
+        return result
 
     @cli.command(name="verify")
     @click.option("--club", default=None, envvar="FOOTBALL_CLUB",
@@ -322,9 +328,9 @@ def register(cli, resolve_club):
     @click.option("--club", default=None, envvar="FOOTBALL_CLUB",
                   help="Whose data to collect. Required.")
     @click.option("--budget", default=200, show_default=True,
-                  help="Most pages to fetch per source in this run. It "
-                       "resumes where it stopped, so a large job can be "
-                       "done over several runs.")
+                  help="Most pages to fetch per polite pause in this run. "
+                       "Each source is still fetched to completion — this "
+                       "only paces how many pages land before the next.")
     @click.option("--dry-run", is_flag=True,
                   help="Report what each source would change and write "
                        "nothing.")
@@ -339,7 +345,16 @@ def register(cli, resolve_club):
         lists as available, in the order `sources` shows them — so a source
         added later, or one that stops being available, changes what this
         does without changing how it is called.
+
+        Each source's own write is committed before the next source runs,
+        and the database rebuilt, so one source's matches are already on
+        disk and loaded by the time a later source (standings, say) asks
+        what seasons this club played. Without that, only the first source
+        in the list could ever be written in a single run: the next one's
+        write would find the first one's, still uncommitted, and refuse.
         """
+        data_dir = Path(ctx.obj["data_dir"])
+        repo_root = data_dir.parent
         conn = _open(ctx.obj["data_dir"], ctx.obj["db_path"])
         club = resolve_for_import(resolve_club, conn, club)
 
@@ -348,17 +363,29 @@ def register(cli, resolve_club):
                    f"{', '.join(source.name for source in sources)}.")
 
         failed = []
+        committed_any = False
         for source in sources:
             click.echo()
             click.echo(click.style(f"== {source.name} ==", fg="cyan", bold=True))
             try:
-                ctx.invoke(fetch_command, source_name=source.name, club=club,
-                          budget=budget)
+                while True:
+                    result = ctx.invoke(fetch_command, source_name=source.name,
+                                        club=club, budget=budget)
+                    if result is None or result.remaining == 0 or not result.fetched:
+                        break
                 ctx.invoke(import_command, source_name=source.name, club=club,
                           dry_run=dry_run, force=force)
-            except click.ClickException as exc:
+                if not dry_run:
+                    committed = protect.commit_data(
+                        repo_root, data_dir, f"Collect {club} from {source.name}")
+                    if committed:
+                        committed_any = True
+                        ctx.invoke(cli.commands["rebuild"])
+            except (click.ClickException, protect.DirtyDataError) as exc:
                 failed.append(source.name)
-                click.echo(click.style(f"  {exc.message}", fg="red"))
+                message = (exc.message if isinstance(exc, click.ClickException)
+                           else str(exc))
+                click.echo(click.style(f"  {message}", fg="red"))
 
         click.echo()
         if failed:
@@ -366,8 +393,10 @@ def register(cli, resolve_club):
                 f"{len(failed)} of {len(sources)} source(s) could not be "
                 f"collected: {', '.join(failed)}. The rest were.",
                 fg="yellow"))
-        if not dry_run and len(failed) < len(sources):
-            click.echo("Run `football rebuild` to load the changes.")
+        if not dry_run:
+            click.echo(click.style(
+                "Database rebuilt with the new data." if committed_any
+                else "Nothing new to collect.", fg="green" if committed_any else None))
 
 
 def _require(name: str):

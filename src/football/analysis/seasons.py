@@ -216,11 +216,9 @@ def cup_runs(conn: sqlite3.Connection, club: str
             ) -> list[tuple[str, str, str, str, str]]:
     """How far each cup run went: (season, competition, round, result, category).
 
-    One row per competition the club entered that season, and — only when
-    there was more than one, so a lone entry is not repeated as its own
-    total — a `"Combined"` row for the furthest any of them reached: a
-    supporter's sense of "how did the cups go that year" is not tied to any
-    one of them.
+    One row per competition the club entered that season — never a summary
+    row for the two or three added together, because no such competition
+    exists to report a result for.
 
     The result uses the final outcome, so a tie lost on penalties ends the
     run — as it did in fact. `category` is `_cup_category`'s judgement of
@@ -251,15 +249,12 @@ def cup_runs(conn: sqlite3.Connection, club: str
         return (season, label, round_name, ending,
                 _cup_category(round_name, ending, tiers.get(season)))
 
-    by_season: dict[str, list[tuple[str, int, str, str, str]]] = {}
-    for (season, _competition), (rank, round_name, result, name) in furthest.items():
-        by_season.setdefault(season, []).append((name, rank, round_name, result))
+    by_season: dict[str, list[tuple[str, str, str]]] = {}
+    for (season, _competition), (_rank, round_name, result, name) in furthest.items():
+        by_season.setdefault(season, []).append((name, round_name, result))
 
     out = []
     for season, entries in sorted(by_season.items()):
-        for name, _rank, round_name, result in sorted(entries):
+        for name, round_name, result in sorted(entries):
             out.append(_row(season, name, round_name, result))
-        if len(entries) > 1:
-            _, rank, round_name, result = max(entries, key=lambda entry: entry[1])
-            out.append(_row(season, "Combined", round_name, result))
     return out

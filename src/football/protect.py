@@ -81,3 +81,42 @@ def assert_data_committed(
         raise DirtyDataError(
             "the canonical files have uncommitted changes; commit or discard "
             f"them first so this write can be undone:\n{result.stdout.rstrip()}")
+
+
+def commit_data(
+    repo_root: Path,
+    data_dir: Path,
+    message: str,
+    run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> bool:
+    """Stage and commit `data_dir`, if a write actually changed anything.
+
+    Lets `collect` land one source's write and move to the next without
+    tripping `assert_data_committed` on its own output — the run's own
+    writes are what this commits, not a licence to sweep up anything else
+    already sitting there. Returns whether a commit was made.
+    """
+    add = run(
+        ["git", "add", "--", str(data_dir)],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    if add.returncode != 0:
+        raise DirtyDataError(f"could not stage {data_dir}: {add.stderr.strip()}")
+
+    status = run(
+        ["git", "status", "--porcelain", "--", str(data_dir)],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    if status.returncode != 0:
+        raise DirtyDataError(
+            f"could not confirm what changed: {status.stderr.strip()}")
+    if not status.stdout.strip():
+        return False
+
+    commit = run(
+        ["git", "commit", "-m", message],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    if commit.returncode != 0:
+        raise DirtyDataError(f"could not commit {data_dir}: {commit.stderr.strip()}")
+    return True

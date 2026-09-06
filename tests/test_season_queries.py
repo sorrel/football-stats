@@ -205,7 +205,9 @@ def test_a_group_stage_is_shown_as_group_stage_not_its_own_letter():
     assert cup_runs(conn, "brighton-hove-albion")[0][3] == "Group Stage"
 
 
-def test_two_cups_in_a_season_also_get_a_combined_row(tmp_path):
+def test_two_cups_in_a_season_are_reported_separately_not_combined(tmp_path):
+    """No cup is called "Combined" — a fabricated summary row is not a
+    result, so each competition stands on its own."""
     conn = _seed_cups(
         [("fa-cup", "FA Cup", "domestic-cup"),
          ("league-cup", "League Cup", "domestic-cup")],
@@ -215,13 +217,10 @@ def test_two_cups_in_a_season_also_get_a_combined_row(tmp_path):
                 round_="Round 2")])
     runs = cup_runs(conn, "brighton-hove-albion")
     labels = [row[1] for row in runs]
-    assert labels == ["FA Cup", "League Cup", "Combined"]
-    combined = runs[-1]
-    assert (combined[2], combined[3]) == ("Quarter-final", "Quarter-final")
+    assert labels == ["FA Cup", "League Cup"]
 
 
-def test_a_lone_competition_gets_no_combined_row_of_its_own():
-    """It would only repeat the one entry already there."""
+def test_a_lone_competition_is_reported_too():
     conn = _seed_cups(("fa-cup", "FA Cup", "domestic-cup"), [
         _match("1982-09-01", "1982-83", "fa-cup", "watford", 1, 0,
                round_="Quarter-final")])
