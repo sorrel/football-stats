@@ -69,10 +69,15 @@ class TableRow:
         return self.won * per_win + self.drawn + self.point_adjustment
 
 
+#: `.` must cross newlines here, or a comment split over several lines
+#: leaves its tail (and the `-->` of the next one) behind in the name.
+_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
 def clean_name(value: str) -> str:
     """Strip wiki markup from a club name."""
     text = _WIKILINK.sub(r"\1", value)
-    return re.sub(r"<!--.*?-->", "", text).strip()
+    return _COMMENT.sub("", text).strip()
 
 
 def has_league_table(wikitext: str) -> bool:
