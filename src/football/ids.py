@@ -13,13 +13,19 @@ _NON_SLUG = re.compile(r"[^a-z0-9]+")
 #: Apostrophes join a word rather than break it: "Nott'm" is one word, so it
 #: must slug as "nottm", not "nott-m".
 _APOSTROPHE = re.compile(r"['\u2019]")
+#: "&" is punctuation and disappears into _NON_SLUG, but a literal "and"
+#: survives as a word \u2014 so "Brighton & Hove Albion" and "Brighton and Hove
+#: Albion" would otherwise slug differently despite naming the same club.
+#: Folding the word onto "&" first makes both collapse to one slug.
+_AND = re.compile(r"\band\b")
 
 
 def slugify(name: str) -> str:
     """Reduce a display name to a lowercase hyphenated slug."""
     decomposed = unicodedata.normalize("NFKD", name)
     ascii_only = decomposed.encode("ascii", "ignore").decode("ascii")
-    without_apostrophes = _APOSTROPHE.sub("", ascii_only.lower())
+    without_and = _AND.sub("&", ascii_only.lower())
+    without_apostrophes = _APOSTROPHE.sub("", without_and)
     slug = _NON_SLUG.sub("-", without_apostrophes).strip("-")
     if not slug:
         raise ValueError(f"name {name!r} produces an empty slug")

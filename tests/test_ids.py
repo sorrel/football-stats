@@ -6,7 +6,8 @@ from football.ids import match_id, slugify
 @pytest.mark.parametrize(
     "name,expected",
     [
-        ("Brighton and Hove Albion", "brighton-and-hove-albion"),
+        ("Brighton and Hove Albion", "brighton-hove-albion"),
+        ("Brighton & Hove Albion", "brighton-hove-albion"),
         ("Manchester United", "manchester-united"),
         ("Nott'm Forest", "nottm-forest"),
         ("Bayern München", "bayern-munchen"),
@@ -16,6 +17,14 @@ from football.ids import match_id, slugify
 )
 def test_slugify(name, expected):
     assert slugify(name) == expected
+
+
+def test_slugify_treats_and_as_equivalent_to_ampersand():
+    assert slugify("Dagenham and Redbridge") == slugify("Dagenham & Redbridge")
+
+
+def test_slugify_does_not_fold_and_inside_a_word():
+    assert slugify("Sandbach") == "sandbach"
 
 
 def test_slugify_rejects_a_name_with_no_usable_characters():
