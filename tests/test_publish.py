@@ -166,3 +166,93 @@ def test_status_and_dry_run_leave_the_mirror_untouched(pair):
         assert "Out of step" in result.stdout
         assert git("rev-parse", "HEAD", cwd=mirror).stdout == before
         assert git("status", "--porcelain", cwd=mirror).stdout == ""
+
+
+# --- The post-merge hook: publish what lands, and only that ---------------
+
+HOOK = PUBLISH.parent / "hooks" / "post-merge"
+
+
+def pull(private, remote, mirror, *args):
+    """`git pull`, with the hook pointed at the miniature mirror."""
+    return subprocess.run(["git", "pull", "-q", *args], cwd=private,
+                          capture_output=True, text=True,
+                          env={**os.environ, **GIT_ENV,
+                               "PUBLIC_REMOTE": str(remote),
+                               "PUBLIC_DIR": str(mirror)})
+
+
+@pytest.fixture
+def landed(pair, tmp_path):
+    """`pair`, with the hook enabled, an origin, and a second clone that
+    lands changes on it the way a merged pull request does.
+    """
+    private, remote, mirror = pair
+    (private / "tools" / "hooks").mkdir()
+    shutil.copy(HOOK, private / "tools" / "hooks" / "post-merge")
+    git("add", "-A", cwd=private)
+    git("commit", "-qm", "the hook", cwd=private)
+    git("config", "core.hooksPath", "tools/hooks", cwd=private)
+
+    origin = tmp_path / "origin.git"
+    git("init", "-q", "--bare", "-b", "master", str(origin), cwd=tmp_path)
+    git("remote", "add", "origin", str(origin), cwd=private)
+    git("push", "-q", "-u", "origin", "master", cwd=private)
+    elsewhere = tmp_path / "elsewhere"
+    git("clone", "-q", str(origin), str(elsewhere), cwd=tmp_path)
+    return private, remote, mirror, elsewhere
+
+
+def land(elsewhere, text="print('landed')\n"):
+    (elsewhere / "src" / "app.py").write_text(text)
+    git("commit", "-qam", "a change", cwd=elsewhere)
+    git("push", "-q", cwd=elsewhere)
+
+
+def test_pulling_a_landed_change_publishes_it(landed):
+    private, remote, mirror, elsewhere = landed
+    land(elsewhere)
+    result = pull(private, remote, mirror)
+    assert result.returncode == 0, result.stderr
+    assert (mirror / "src" / "app.py").read_text() == "print('landed')\n"
+    assert not (mirror / "tools").exists()
+
+
+def test_a_pull_into_another_branch_is_not_published(landed):
+    private, remote, mirror, elsewhere = landed
+    git("checkout", "-qb", "feature/elsewhere", cwd=private)
+    land(elsewhere)
+    result = pull(private, remote, mirror, "origin", "master")
+    assert result.returncode == 0, result.stderr
+    assert not mirror.exists()
+
+
+def test_a_local_merge_not_yet_pushed_is_not_published(landed):
+    """Publish what has landed on origin, never a merge only this machine
+    has seen.
+    """
+    private, remote, mirror, _ = landed
+    git("checkout", "-qb", "feature/local", cwd=private)
+    (private / "src" / "app.py").write_text("print('local')\n")
+    git("commit", "-qam", "local only", cwd=private)
+    git("checkout", "-q", "master", cwd=private)
+    result = subprocess.run(["git", "merge", "-q", "--ff-only", "feature/local"],
+                            cwd=private, capture_output=True, text=True,
+                            env={**os.environ, **GIT_ENV,
+                                 "PUBLIC_REMOTE": str(remote),
+                                 "PUBLIC_DIR": str(mirror)})
+    assert result.returncode == 0, result.stderr
+    assert "not level with" in result.stderr
+    assert not mirror.exists()
+
+
+def test_a_failed_publish_does_not_fail_the_pull(landed):
+    """The pull has already happened; the hook can only warn."""
+    private, remote, mirror, elsewhere = landed
+    (private / "notes.txt").write_text("lying about\n")
+    land(elsewhere)
+    result = pull(private, remote, mirror)
+    assert result.returncode == 0, result.stderr
+    assert "did not publish" in result.stderr
+    assert (private / "src" / "app.py").read_text() == "print('landed')\n"
+    assert not (mirror / "src" / "app.py").exists()
