@@ -72,7 +72,7 @@ def build_engsoccer(cache: PageCache, club: str, context: dict) -> Batch:
     league_ours = ours(league)
     cup_ours = [r for r in ours(cup) if engsoccer.is_real_match(r)]
     lc_ours = [r for r in ours(league_cup) if engsoccer.is_real_match(r)]
-    po_ours = ours(playoffs)
+    po_ours = [r for r in ours(playoffs) if engsoccer.is_league_playoff(r)]
 
     matches = [engsoccer.league_match(r) for r in league_ours]
     matches += [engsoccer.facup_match(r) for r in cup_ours]

@@ -111,6 +111,18 @@ def parse_venue(text: str) -> tuple[str, str, str]:
 #: Play-offs belong to a division but are not league matches — counting them
 #: as such would distort every league record. They get their own competition
 #: per tier, named for the era, e.g. "Championship Play-offs".
+def is_league_playoff(record: dict[str, str]) -> bool:
+    """A Football League play-off or Test Match, not a non-League one.
+
+    The source's play-off file also holds the Conference and lower play-offs,
+    whose `division` is a code ("conference", "N", "I.SC") rather than a
+    League tier. Non-League seasons are gaps in this record, so those are
+    skipped rather than given an invented tier.
+    """
+    division = _clean(record.get("division", ""))
+    return division.isdigit() or division.lower() == _TEST_MATCH
+
+
 def playoff_competition(tier: str, season_start: str | int) -> tuple[str, str]:
     if _clean(tier).lower() == _TEST_MATCH:
         return _TEST_MATCH_SLUG, "Test Matches"
@@ -244,7 +256,10 @@ def _leg_from_tie(tie: str) -> str:
 
 
 def _is_replay_tie(tie: str) -> bool:
-    return _clean(tie).lower().startswith("replay")
+    # `check_replay_data` marks a replay whose number the source has not
+    # confirmed (19 League Cup ties, 1984-85). It is a replay all the same.
+    tie = _clean(tie).lower()
+    return tie.startswith("replay") or tie == "check_replay_data"
 
 
 def _set_scores(row: dict[str, str], record: dict[str, str],

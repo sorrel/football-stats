@@ -90,6 +90,31 @@ def test_a_replay_points_at_the_tie_it_replays():
     assert initial["is_replay"] == ""
 
 
+def test_only_football_league_play_offs_are_kept():
+    # engsoccerdata's play-off file also carries non-League play-offs
+    # (Conference, its regional divisions and below), with no League tier
+    # and dates written as day counts. Wrexham's 2018 Conference play-off
+    # crashed the import. Non-League seasons are gaps in this record, as
+    # Barrow's are, so their play-offs are left out rather than invented.
+    assert e.is_league_playoff(_playoff(division="2"))
+    assert e.is_league_playoff(_playoff(division="test match"))
+    for division in ("conference", "N", "S", "I.SC"):
+        assert not e.is_league_playoff(_playoff(division=division))
+
+
+def test_an_unnumbered_replay_is_still_a_replay():
+    # engsoccerdata tags 19 League Cup replays from 1984-85 `check_replay_data`
+    # rather than `replay1`/`replay2`: it knows they are replays but not which.
+    # Chelsea v Sheffield Wednesday went to a second replay at the same
+    # ground as the first meeting, which read as the same tie appearing twice.
+    initial = e.leaguecup_match(_leaguecup(tie="initial", FT="1-1"))
+    replay = e.leaguecup_match(_leaguecup(tie="check_replay_data",
+                                          Date="1960-11-02", FT="2-1"))
+    e.link_replays([initial, replay])
+    assert replay["is_replay"] == "true"
+    assert replay["replay_of"] == initial["match_id"]
+
+
 def test_a_league_cup_tie_records_its_round_and_attendance():
     row = e.leaguecup_match(_leaguecup(attendance="12,345"))
     assert row["competition"] == "league-cup"
