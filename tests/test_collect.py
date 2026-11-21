@@ -14,6 +14,7 @@ behaviour under test.
 
 import subprocess
 
+import pytest
 from click.testing import CliRunner
 
 from football import schema, store
@@ -22,6 +23,16 @@ from football.cli import cli
 from football.parse.base import blank_row
 from football.sources import registry
 from football.sources.batch import Batch
+
+
+@pytest.fixture(autouse=True)
+def _no_signing(monkeypatch):
+    """Turn signing off for every git process these tests start, `collect`'s
+    own commits included — as test_publish.py does. The environment outranks
+    every config file, so the machine's signing setup cannot reach in."""
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "commit.gpgsign")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
 
 
 def _git(cwd, *args):
@@ -42,6 +53,22 @@ def _seed_and_commit(tmp_path):
     _git(tmp_path, "config", "user.name", "Test")
     _git(tmp_path, "add", "data")
     _git(tmp_path, "commit", "--quiet", "-m", "seed")
+
+
+def test_commits_here_do_not_depend_on_the_machines_signing_setup(tmp_path):
+    """A repository told to sign with a key that does not exist still commits.
+
+    With signing on in the global config and the key's agent locked, every
+    commit these tests make failed and each waited on the agent, turning a
+    15-second suite into seven minutes with six failures.
+    """
+    _seed_and_commit(tmp_path)
+    _git(tmp_path, "config", "commit.gpgsign", "true")
+    _git(tmp_path, "config", "gpg.format", "ssh")
+    _git(tmp_path, "config", "user.signingkey", str(tmp_path / "no-such-key"))
+    (tmp_path / "data" / "extra.txt").write_text("x")
+    _git(tmp_path, "add", "data")
+    _git(tmp_path, "commit", "--quiet", "-m", "unsigned")
 
 
 def _source(name, *, available=True, unavailable_because="", keys=None,
